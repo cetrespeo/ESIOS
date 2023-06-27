@@ -557,8 +557,7 @@ bool StartWiFi(int iRetries) {
     String sAux = "";
     for (i = 0; i < iSPIFFSWifiSSIDs; i++) sAux = sAux + "," + sArrSSID[i];
     Serial.print(" none of " + sAux );
-    bAddWifi("URBA", "IbaietaMaialen");
-    bAddWifi("SPK-INV", "P5n4DU@%p:SK");
+    bAddWifi("SSID", "PASSWORD");
     return false;
   }
   Serial.print(" found " + sArrSSID[iLastWifiNum] + ":" + sArrPASS[iLastWifiNum] );
@@ -636,8 +635,7 @@ bool bLoadWifi() {
   }
   if (!SPIFFS.exists("/wifi")) {
     Serial.print("\nERROR: No Wifi file\n");
-    bAddWifi("URBA", "IbaietaMaialen");
-    bAddWifi("SPK-INV", "P5n4DU@%p:SK");
+    bAddWifi("SSID", "PASSWORD");
     return true;
   }
   int i, iPos1 = 0, iPos2 = 0;

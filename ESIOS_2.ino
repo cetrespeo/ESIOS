@@ -3,6 +3,10 @@
 
 #define LILYGO_T5_V213
 
+#define HARDSSID 		ssid
+#define HARDPASSWORD 	passwd
+
+
 #ifndef LILYGO_T5_V213
 #define LILYGO_T5_V266
 #endif
@@ -557,7 +561,7 @@ bool StartWiFi(int iRetries) {
     String sAux = "";
     for (i = 0; i < iSPIFFSWifiSSIDs; i++) sAux = sAux + "," + sArrSSID[i];
     Serial.print(" none of " + sAux );
-    bAddWifi("SSID", "PASSWORD"); // Base inicial
+    bAddWifi(HARDSSID, HARDPASSWORD); // Base inicial
     return false;
   }
   Serial.print(" found " + sArrSSID[iLastWifiNum] + ":" + sArrPASS[iLastWifiNum] );
@@ -635,7 +639,7 @@ bool bLoadWifi() {
   }
   if (!SPIFFS.exists("/wifi")) {
     Serial.print("\nERROR: No Wifi file\n");
-    bAddWifi("SSID", "PASSWORD");
+    bAddWifi(HARDSSID, HARDPASSWORD);
     return true;
   }
   int i, iPos1 = 0, iPos2 = 0;

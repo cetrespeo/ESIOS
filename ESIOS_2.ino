@@ -1,34 +1,46 @@
 // Importante, si falla con el GxEPD, instalar esto https://github.com/lewisxhe/GxEPD
 // LIBS: ESP32 board lib MAX 1.04; GxEPD from Lewisxhe; Adafruit_GFX max 1.11; ESPAsyncWebSrv 1.2.6, FirebaseEsp32 (Mobitz) 3.8.8
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+
+#define v21     //Screen version within 21, 26, 29 for screen size 2.13, 2.66, 2.90 respectevly
+
+const String sVer = "1.55";
+
+#define DEFAULT_WIFI_PARAMS "SSID PASS" // just put all your SSIDs and PASS separated by a space
+#define TIME_CORRECTION -66 //parts per 10000 of second
+#define HOURS_UPDATE 12
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+#ifdef v21
 #define LILYGO_T5_V213
-
-#define HARDSSID 		ssid
-#define HARDPASSWORD 	passwd
-
-
+#endif
 #ifndef LILYGO_T5_V213
 #define LILYGO_T5_V266
 #endif
-
 #include <boards.h>
 #include <GxEPD.h>
 #include <GxFont_GFX.h>
 #ifdef LILYGO_T5_V213
-#include <GxDEPG0213BN/GxDEPG0213BN.h>    // 2.13" b/w  form DKE GROUP
-bool v213 = true;
+#include <GxDEPG0213BN/GxDEPG0213BN.h>      // 2.13" b/w  form DKE GROUP
+const int iVersion = 1;
 #endif
 #ifdef LILYGO_T5_V266
-#include <GxDEPG0266BN/GxDEPG0266BN.h>    // 2.66" b/w  form DKE GROUP
-bool v213 = false;
+#ifdef v29
+#include <GxDEPG0290R/GxDEPG0290R.h>        // for 2.9"
+const int iVersion = 9;
+#else
+#include <GxDEPG0266BN/GxDEPG0266BN.h>      // 2.66" b/w  form DKE GROUP
+const int iVersion = 6;
+#endif
 #endif
 #include <Fonts/FreeMonoBold24pt7b.h>
 #include <Fonts/FreeMonoBold18pt7b.h>
+#include <Fonts/FreeMonoBold12pt7b.h>
 #include <Fonts/FreeMonoBold9pt7b.h>
 #include <Fonts/FreeMono9pt7b.h>
 #include <GxIO/GxIO_SPI/GxIO_SPI.h>
 #include <GxIO/GxIO.h>
-
 #include <WiFiClientSecure.h>
 #include <rom/rtc.h>
 #include <FS.h>
@@ -36,29 +48,32 @@ bool v213 = false;
 #include <SPIFFS.h>
 #include <Update.h>
 #include <ESPAsyncWebSrv.h>
-#include <FirebaseESP32.h>            // avoid >3.8.8.
+#include <FirebaseESP32.h>                  // avoid >3.8.8.
+#include <ESP32Time.h>                      //fbiego
 #define FIREBASE_HOST "weatheresp32.firebaseio.com"
 #define FIREBASE_AUTH "htFuCm2OfTXtP4g5xrQBpSaE0IHYEOrSLoVmSiBF"
+#define MAX_MODES 6 //ESIOSH, OMIE_DAILYH, , , OMIE_MONTHLY, CLOCK
 
 AsyncWebServer server(80);
 GxIO_Class io(SPI,  EPD_CS, EPD_DC,  EPD_RSET);
 GxEPD_Class display(io, EPD_RSET, EPD_BUSY);
+ESP32Time rtc;
 
-String sTimeZone = "CET-1CEST,M3.5.0,M10.5.0/3", sMACADDR, sArrSSID[10], sArrPASS[10] , sRefreshText, sUpdateFirmware = "";
-bool bWeHaveWifi = false, bSPIFFSExists = false, bResetBtnPressed;
-int32_t tNow = 0, iSPIFFSWifiSSIDs , iScreenXMax , iScreenYMax, iTimeDiffPerDay;
-float fPriceHour[24], fScreenXMax , fScreenYMax, fCaptOMIE = -100;
-int iMode = -3, iAnalogRead, iVBAT , iMaxVolt = 2200;
-const float fCurv[] = { 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.10, 0.23, 0.34, 0.43, 0.46, 0.43, 0.34, 0.23, 0.10, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.04, 0.19, 0.34, 0.48, 0.58, 0.61, 0.58, 0.48, 0.34, 0.19, 0.04, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.11, 0.26, 0.42, 0.55, 0.64, 0.67, 0.64, 0.55, 0.42, 0.26, 0.11, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.11, 0.26, 0.42, 0.55, 0.64, 0.67, 0.64, 0.55, 0.42, 0.26, 0.11, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.06, 0.19, 0.35, 0.50, 0.63, 0.72, 0.75, 0.72, 0.63, 0.50, 0.35, 0.19, 0.06, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.13, 0.28, 0.44, 0.60, 0.74, 0.83, 0.86, 0.83, 0.74, 0.60, 0.44, 0.28, 0.13, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.03, 0.16, 0.31, 0.47, 0.63, 0.76, 0.85, 0.88, 0.85, 0.76, 0.63, 0.47, 0.31, 0.16, 0.03, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.02, 0.16, 0.33, 0.51, 0.69, 0.83, 0.93, 0.97, 0.93, 0.83, 0.69, 0.51, 0.33, 0.16, 0.02, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.09, 0.25, 0.43, 0.60, 0.74, 0.84, 0.88, 0.84, 0.74, 0.60, 0.43, 0.25, 0.09, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.02, 0.16, 0.32, 0.49, 0.63, 0.73, 0.76, 0.73, 0.63, 0.49, 0.32, 0.16, 0.02, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.06, 0.20, 0.35, 0.49, 0.58, 0.61, 0.58, 0.49, 0.35, 0.20, 0.06, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.06, 0.20, 0.35, 0.49, 0.58, 0.61, 0.58, 0.49, 0.35, 0.20, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.11, 0.24, 0.35, 0.43, 0.46, 0.43, 0.35, 0.24, 0.11, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.08, 0.20, 0.31, 0.38, 0.41, 0.38, 0.31, 0.20, 0.08, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00};
+String sTimeZone = "CET-1CEST,M3.5.0,M10.5.0/3", sMACADDR, sArrSSID[10], sArrPASS[10] , sRefreshText, sUpdateFirmware = "", sWifiFBMsg = "";
+bool bWeHaveWifi = false, bSPIFFSExists = false, bResetBtnPressed, bWeHaveFirebase = false, bWeHaveGoodData = false, bFirstClockUpdate = true;
+int32_t tNow = 0, iSPIFFSWifiSSIDs , iScreenXMax , iScreenYMax, iTimeDiffPerDay, tFirstReboot = 0, iNumberReboots = 0, iLastMinute, iFirstNTPSync = 0, iTimeCorrAccum = 0, iLastNTPSync, iLastFirebaseSync;
+float fPriceData[31], fScreenXMax , fScreenYMax, fCaptOMIE = -100;
+int iMode = -3, iAnalogRead, iVBAT , iMaxVolt = 2200, iLoops = 0, iAdjDone, iTimeCorrection = 0, iHoursUpdate = 24;
+
 FirebaseData firebaseData;
 FirebaseJson jData, jVars;
-
-const String sVer = "1.04";
+const char* WeekDayNames[7] = {"Dom", "Lun", "Mar", "Mie", "Jue", "Vie", "Sab"};
+const char* MonthNames[12] = {"Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"};
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 void setup() {
-  int i;
+  int i, iNeedReload = 0;
   iAnalogRead = 0;
   for (i = 0; i < 50; i++) {
     delay(10);
@@ -67,7 +82,7 @@ void setup() {
   iAnalogRead = iAnalogRead / i ;
   sMACADDR = getMacAddress();
   Serial.begin(115200);
-  Serial.printf("\n--------------------------------------------------\n ESIOS - OMIE display v%s %s\n--------------------------------------------------\n", sVer.c_str(), v213 ? "2.13" : "2.66");
+  Serial.printf("\n--------------------------------------------------\n ESIOS - OMIE display v%s 2.%d  MAC=%s\n--------------------------------------------------\n", sVer.c_str(), iVersion, sMACADDR.c_str());
   SPI.begin(EPD_SCLK, EPD_MISO, EPD_MOSI);
   display.init();
   delay(50);
@@ -80,6 +95,7 @@ void setup() {
   } else bSPIFFSExists = true;
   delay(50);
   pinMode(39, INPUT);
+  //  deleteSPIFFSFile("/wifi");
   bLoadWifi();
   bLoadTime();
   iTimeDiffPerDay =  iLoadInt("/timediff");
@@ -94,14 +110,20 @@ void setup() {
   if (iVBAT > 100) iVBAT = 100;
   if (iVBAT < 0) iVBAT = 0;
   if (iMode < 0) {
-    bSaveMode(1);
-    iMode = 1;
+    iMode = 0;
+    bSaveMode(iMode);
   }
-  Serial.printf(" tNow=%s, Diff=%d, Mode=%d, Volt= %d%% with %d/%d, MAC=%s. \n", sTimetoStr(tNow).c_str(), iTimeDiffPerDay, iMode, iVBAT, iAnalogRead, iMaxVolt, sMACADDR.c_str());
+  iTimeCorrection = TIME_CORRECTION;
+  iHoursUpdate = HOURS_UPDATE;
+  iNeedReload =   iLoadInt("/NeedReload");
+  //deleteSPIFFSFile("/reboots");
+  iAddReboot();
+  Serial.printf(" tNow=%s, Diff=%d, Mode=%d, Volt= %d%% with %d/%d. \n", sTimetoStr(tNow).c_str(), iTimeDiffPerDay, iMode, iVBAT, iAnalogRead, iMaxVolt);
   String sRESETREASON = sGetResetReason();
-  bResetBtnPressed = (sRESETREASON == "PON") || (sRESETREASON == "RTC");
+  bResetBtnPressed = ((sRESETREASON == "PON") || (sRESETREASON == "RTC") || (iNeedReload));
   Serial.println("--------------------------------------------------\n Reset due to " + sRESETREASON + " @" + sTimetoStr(tNow))  ;
   if (bResetBtnPressed) {
+    bSaveInt("/NeedReload", 0);
     Serial.println("****** bResetBtnPressed ********");
     delay(1000);
     if (!digitalRead(39)) {
@@ -114,7 +136,7 @@ void setup() {
       Serial.println("**************** BUTTON 39 RELEASED******************" + (String)(iCount));
       if (iCount < 30) {
         iMode = iMode + 1 ;
-        if (iMode > 3) iMode = 0;
+        if (iMode > (MAX_MODES - 1)) iMode = 0;
         bSaveMode(iMode);
         sRefreshText = "New mode =" + (String)(iMode);
         Serial.println("Mode changed to [" + (String)(iMode) + "] @" + sTimetoStr(tNow));
@@ -127,329 +149,656 @@ void setup() {
     } else {
       Serial.println(" Force WifiLoad @" + sTimetoStr(tNow));
       if (!bWeHaveWifi) StartWiFi(10);
+      bManageFirebase();
     }
   }
-  if (bWeHaveWifi) {
-    bManageFirebase();
+  if (iMode != 5) {
+    bWeHaveGoodData = bGetData(tNow, iMode);
+  } else {
+    if (WiFi.status() == WL_CONNECTED)  {
+      WiFi.disconnect();
+      WiFi.mode(WIFI_OFF);
+      bWeHaveWifi = false;
+    }
+    display.setTextColor(GxEPD_BLACK);
+    display.setRotation(1);
+    display.fillScreen(GxEPD_WHITE);
+    display.update();
+    delay(3000);
+    tNow = time(nullptr);
   }
-  bGetData(tNow);
 }
 //**************************************************************************************************************************
 void loop() {
-  RefreshGraph();
-  if (WiFi.status() == WL_CONNECTED)  WiFi.disconnect();
-  WiFi.mode(WIFI_OFF);
-  bWeHaveWifi = false;
-  display.powerDown();
-  tNow += (millis() / 1000);
-  int iSleepSecs = 3600 + 15 - (tNow % 3600) - (iTimeDiffPerDay / 24);
-  if (iSleepSecs < 180)  iSleepSecs = iSleepSecs + 3600;
-  if (hour(tNow) == 23) {
-    int iRnd = random(1, 100) * 10;
-    tNow += iRnd;
-    iSleepSecs += iRnd;
+  unsigned long iMillis, iMillisLoop;
+  static unsigned long iMillisBatt = 0;
+  iMillis = millis();
+  if ((iMillis - iMillisBatt) > 3600000) {
+    iVBAT = (((float)(iAnalogRead ) * 100.0f / (float)(iMaxVolt)) - 85.0f) * 100 / 15 ;
+    if (iVBAT > 100) iVBAT = 100;
+    if (iVBAT < 0) iVBAT = 0;
+    iMillisBatt = iMillis;
   }
-  SendToSleep(iSleepSecs);
+  if (iMode != 5) {
+    RefreshGraph();
+    int iSleepSecs;
+    bManageFirebase();
+    tNow += (millis() / 1000); //update
+    iSleepSecs = 3600 + 60 - (tNow % 3600);
+    if (iSleepSecs < 180)  iSleepSecs = iSleepSecs + 3600;
+    if (!bWeHaveGoodData) {
+      Serial.print(" --REBOOT SHORTED-- ");
+      iSleepSecs = random(600, 1200);
+      bSaveInt("/NeedReload", 1);
+    } else {
+      if (iMode == 4) {
+        iSleepSecs = iSleepSecs + ((24 - hour(tNow + iSleepSecs)) * 3600) + (random(5, 60) * 60);
+      } else {
+        if (hour(tNow) == 23) iSleepSecs = iSleepSecs + random(1, 100) * 10;
+      }
+    }
+    if (bWeHaveWifi && bWeHaveFirebase) {
+      String sAux = "/IoT/dev/" + sMACADDR + "/NextWakeUp";
+      Firebase.deleteNode(firebaseData, sAux);
+      Firebase.setString(firebaseData, sAux, sTimetoStr(tNow + iSleepSecs));
+    }
+    //////////////////////////////////////////////////////
+    if (WiFi.status() == WL_CONNECTED)  WiFi.disconnect();
+    WiFi.mode(WIFI_OFF);
+    bWeHaveWifi = false;
+    display.powerDown();
+    SendToSleep(iSleepSecs);
+  } else {    //////////////////// CLOCK
+    iLoops++;
+    tNow = time(nullptr);
+    int tCorrInt = (float)((tNow - iLastNTPSync) * iTimeCorrection) / 10000.0;
+    if (iLastNTPSync > 0) {
+      tNow = tNow + tCorrInt;
+    }
+    if (minute(tNow) != iLastMinute) {
+      int iH = display.height() * .61;
+      display.fillScreen(GxEPD_WHITE);
+      display.setFont(&FreeMonoBold24pt7b);
+      display.setTextSize(2);
+      char buff[30];
+      sprintf(buff, "%02d",  hour(tNow));
+      DisplayTextAligned(display.width() * .42 , iH, String(buff), -1, 10);
+      DisplayTextAligned(display.width() * .43 , iH * .9, ":", 0, 10);
+      sprintf(buff, "%02d",  minute(tNow));
+      DisplayTextAligned(display.width() * .55 , iH, String(buff), 1, 10);
+      display.setFont(&FreeMonoBold18pt7b);
+      display.setTextSize(1);
+      if (iVBAT > 5) {
+        sprintf(buff, "%s %02d %s",  WeekDayNames[weekday(tNow)], day(tNow), MonthNames[month(tNow) - 1]);
+        DisplayTextAligned(display.width() * .59 , display.height() * .96, String(buff), 0, 10);
+        drawBat(0.03, 0.79);
+      } else {
+        DisplayTextAligned(display.width() * .58 , display.height() * .96, "LOW BAT - RECHARGE", 0, 10);
+      }
+      iLastMinute = minute(tNow);
+      sprintf(buff, "%04d/%02d/%02d_%02d:%02d:%02d", year(tNow), month(tNow), day(tNow), hour(tNow), minute(tNow), second(tNow));
+      if ((iLastMinute != 0) && (!bFirstClockUpdate)) {
+        display.updateWindow(0, 0, GxEPD_WIDTH, GxEPD_HEIGHT, false);
+        Serial.printf(" Clock PART Refresh: %s", buff);
+        delay(2900);
+      } else {
+        display.update();
+        Serial.printf(" Clock FULL Refresh: %s", buff);
+        delay(3900);
+      }
+      iMillisLoop = millis() - iMillis + 500;
+      Serial.printf(" loop %dms (alive t=%dsec) Corr=%d ",  iMillisLoop, tNow - iLastNTPSync, tCorrInt);
+      delay(500);
+      //sync
+      if ((tNow - iLastNTPSync) > (iHoursUpdate * 3600)) { //resync every xx hours
+        if (!bWeHaveWifi) StartWiFi(10);
+        if (bWeHaveWifi)  {
+          bManageFirebase();
+          iLastFirebaseSync = tNow;
+        }
+        if (WiFi.status() == WL_CONNECTED)  {
+          WiFi.disconnect();
+          WiFi.mode(WIFI_OFF);
+        }
+        bWeHaveWifi = false;
+        iMillisLoop = 0;
+      }
+      //sleep
+      long lMSecs = (62 - second(tNow)) * 1000 - iMillisLoop; //aim to 2 secs
+      if (lMSecs > 10)      {
+        SendtoLightSleep(lMSecs);
+      } else {
+        delay(lMSecs);
+        Serial.printf(" delaying %d secs. \n", lMSecs / 1000);
+      }
+    } else {
+      delay(1000);
+      Serial.print(".");
+    }
+    bFirstClockUpdate = false;
+  }
 }
 //**************************************************************************************************************************
 bool bManageFirebase() {
   String sAux, sUpdateFirmware;
+  bool bRebootNeeded = false;
+  int iAux = 0;
   if (!bWeHaveWifi) return false;
-  Serial.print(" Firebase:");
-  Firebase.begin(FIREBASE_HOST, FIREBASE_AUTH);
-  Firebase.reconnectWiFi(true);
-  Firebase.setReadTimeout(firebaseData, 1000 * 40);
-  Firebase.setwriteSizeLimit(firebaseData, "medium");
-  Firebase.setMaxRetry(firebaseData, 3);
-  Firebase.setMaxErrorQueue(firebaseData, 30);
-  sAux = "/IoT/dev/" + sMACADDR + "/LastOn";
+  if (bWeHaveFirebase) {
+    Serial.print(" Reusing Firebase");
+  } else {
+    Serial.print(" Open Firebase");
+    Firebase.begin(FIREBASE_HOST, FIREBASE_AUTH);
+    Firebase.reconnectWiFi(true);
+    /*
+      Firebase.setReadTimeout(firebaseData, 2000);
+      Firebase.setwriteSizeLimit(firebaseData, "tiny");
+      Firebase.setMaxRetry(firebaseData, 3);
+      Firebase.setMaxErrorQueue(firebaseData, 30);
+    */
+  }
+  Serial.print(".");
+  sAux = "/IoT/dev/" + sMACADDR + "/LastSync";
+  Firebase.deleteNode(firebaseData, sAux);
+  delay(50);
   Firebase.setString(firebaseData, sAux, sTimetoStr(tNow));
+  Serial.print(".");
   sAux = "/IoT/dev/" + sMACADDR + "/Ver";
-  Firebase.setString(firebaseData, sAux, sVer + " @" + (v213 ? "2.13" : "2.66") + " Mode:" + (String)(iMode));
+  Firebase.deleteNode(firebaseData, sAux);
+  delay(50);
+  Firebase.setString(firebaseData, sAux, sVer + " @2." + (String)(iVersion) + " Mode:" + (String)(iMode));
+  Serial.print(".");
   sAux = "/IoT/dev/" + sMACADDR + "/TimeDiff";
+  Firebase.deleteNode(firebaseData, sAux);
+  delay(50);
   Firebase.setInt(firebaseData, sAux, iTimeDiffPerDay);
+  Serial.print(".");
   sAux = "/IoT/dev/" + sMACADDR + "/VBat";
+  Firebase.deleteNode(firebaseData, sAux);
+  delay(50);
   Firebase.setInt(firebaseData, sAux, iVBAT);
+  Serial.print(".");
+  delay(50);
   sAux = "/IoT/dev/" + sMACADDR + "/VBatMax";
+  Firebase.deleteNode(firebaseData, sAux);
+  delay(50);
   Firebase.setInt(firebaseData, sAux, iMaxVolt);
+  Serial.print(".");
+  if (iMode == 5) {
+    delay(50);
+    sAux = "/IoT/dev/" + sMACADDR + "/TimeCorr";
+    Firebase.deleteNode(firebaseData, sAux);
+    delay(50);
+    iAux = iTimeCorrection;
+    Firebase.setInt(firebaseData, sAux, iAux );
+    Serial.print(".");
+    delay(50);
+    sAux = "/IoT/dev/" + sMACADDR + "/TimeUpdt";
+    Firebase.deleteNode(firebaseData, sAux);
+    delay(50);
+    iAux = iHoursUpdate;
+    Firebase.setInt(firebaseData, sAux, iAux );
+    Serial.print(".");
+  }
+  if (sWifiFBMsg.length() > 0) {
+    sAux = "/IoT/dev/" + sMACADDR + "/Signal";
+    Firebase.deleteNode(firebaseData, sAux);
+    delay(50);
+    Firebase.setString(firebaseData, sAux, sWifiFBMsg);
+  }
+  if (tFirstReboot) {
+    sAux = "/IoT/dev/" + sMACADDR + "/RebootsPerDay";
+    int iDeltaDays = ((tNow - tFirstReboot) / 86400);
+    if (iDeltaDays < 1) iDeltaDays = 1;
+    String sData = (String)(iNumberReboots / iDeltaDays) + " reboots/day. " + (String)(iNumberReboots) + " since " + sTimetoStr(tFirstReboot);
+    Firebase.setString(firebaseData, sAux, sData);
+  }
+  delay(50);
   sAux = "/IoT/dev/" + sMACADDR + "/Update";
   Firebase.get(firebaseData, sAux);
   sUpdateFirmware = firebaseData.stringData();
   sUpdateFirmware.trim();
   sUpdateFirmware.toLowerCase();
   if (sUpdateFirmware.length() == 0) Firebase.setString(firebaseData, "/IoT/dev/" + sMACADDR + "/Update", "-");
-  if (sUpdateFirmware.length() > 4) {
-    if (sUpdateFirmware.substring(sUpdateFirmware.length() - 4) == ".bin") {
-      Serial.printf(" UPDATE COMMAND RECEIVED %s\n", sUpdateFirmware.c_str());
-      Firebase.setString(firebaseData, sAux, "Started '" + sUpdateFirmware + "' from " + sVer + " @" + sTimetoStr(tNow));
-      if (execOTA("omie/" + sUpdateFirmware)) Firebase.setString(firebaseData, sAux, "Updated '" + sUpdateFirmware + "' from " + sVer + " @" + sTimetoStr(tNow));
-      else Firebase.setString(firebaseData, sAux, "Failed '" + sUpdateFirmware + "' from " + sVer + " @" + sTimetoStr(tNow));
-    }
+  if (sUpdateFirmware.endsWith(".bin")) {
+    Serial.printf(" UPDATE COMMAND RECEIVED %s\n", sUpdateFirmware.c_str());
+    Firebase.setString(firebaseData, sAux, sUpdateFirmware + " Started from " + sVer + " @" + sTimetoStr(tNow));
+    if (execOTA("omie/" + sUpdateFirmware)) Firebase.setString(firebaseData, sAux, sUpdateFirmware + " Updated from " + sVer + " @" + sTimetoStr(tNow));
+    else Firebase.setString(firebaseData, sAux, sUpdateFirmware + " Failed!! from " + sVer + " @" + sTimetoStr(tNow));
+    tNow += millis() / 1000;
+    bRebootNeeded = true;
   }
+  delay(50);
+  Serial.print(".");
   sAux = "/IoT/dev/" + sMACADDR + "/Command";
   Firebase.get(firebaseData, sAux);
   sAux = firebaseData.stringData();
   sAux.trim();
   sAux.toLowerCase();
   if (sAux.length() == 0) Firebase.setString(firebaseData, "/IoT/dev/" + sMACADDR + "/Command", "-");
-  if ((sAux == "erase") || (sAux == "format")) {
+  if (sAux == "format") {
     Firebase.setString(firebaseData, "/IoT/dev/" + sMACADDR + "/Command", "_Formatted @" + sTimetoStr(tNow));
     SPIFFS.format();
+    bRebootNeeded = true;
+  }
+  delay(50);
+  Serial.print(".");
+  if (sAux.startsWith("setmode")) {
+    sAux = sAux.substring(8);
+    iMode = sAux.toInt();
+    Firebase.setString(firebaseData, "/IoT/dev/" + sMACADDR + "/Command", "_ModeSet '" + (String)(iMode) + "' @" + sTimetoStr(tNow));
+    bSaveMode(iMode);
+    //bRebootNeeded = true;
+  }
+  delay(50);
+  Serial.print(".");
+  if (sAux.startsWith("delete")) {
+    sAux = sAux.substring(7);
+    sAux.trim();
+    sAux.toLowerCase();
+    if (!sAux.startsWith("/")) sAux = "/" + sAux;
+    deleteSPIFFSFile(sAux.c_str());
+    Firebase.setString(firebaseData, "/IoT/dev/" + sMACADDR + "/Command", "_Delete '" + sAux + "' @" + sTimetoStr(tNow));
+    if (sAux == "/reboots") {
+      tFirstReboot = tNow;
+      iNumberReboots = 0;
+      iAddReboot();
+    }
+  }
+  delay(50);
+  Serial.print(".");
+  if (sAux.startsWith("settimecorr")) {
+    sAux = sAux.substring(12);
+    iTimeCorrection = sAux.toInt();
+    Serial.printf("\n TimeCorrection loaded=%d \n", iTimeCorrection);
+    Firebase.setString(firebaseData, "/IoT/dev/" + sMACADDR + "/Command", "_SetTimeCorr '" + (String)(iTimeCorrection) + "' @" + sTimetoStr(tNow));
+  }
+  bWeHaveFirebase = true;
+  Serial.print(" FB_Done.\n");
+  if (bRebootNeeded)    {
+    bSaveInt("/NeedReload", 1);
     SendToSleep(0);
   }
-  Serial.print(" FB_Done.\n");
   return true;
 }  //**************************************************************************************************************************
 #define VBATW 11
 #define CAPT_HX 0.69f
 #define CAPT_HY 0.55f
 
+void drawBat(float fX, float fY) {
+  iScreenXMax = display.width() ;
+  iScreenYMax = display.height();
+  // VBAT
+  if (iVBAT > 0) {
+    display.fillRect(iScreenXMax * fX + 2, iScreenYMax * fY - 1, VBATW - 6, 2, GxEPD_BLACK);
+    display.fillRect(iScreenXMax * fX , iScreenYMax * fY, VBATW - 2,  iScreenYMax * 0.18f, GxEPD_BLACK);
+    display.fillRect(iScreenXMax * fX + 1, iScreenYMax * fY + 1, VBATW - 4,  iScreenYMax * 0.16f , GxEPD_WHITE);
+    display.fillRect(iScreenXMax * fX + 2 , iScreenYMax * fY + 2  + ((iScreenYMax * 0.15f) * (100 - iVBAT) / 100), VBATW - 6, ((iScreenYMax * 0.15f)*iVBAT / 100) - ((iVersion > 1) ? 1 : 0) , GxEPD_BLACK);
+  } else {
+    display.setFont(&FreeMonoBold9pt7b);
+    DisplayTextAligned(iScreenXMax * 0.35f, iScreenYMax * 0.99f , "low BATT", 1, 6);
+  }
+}
 void RefreshGraph() {
-  int i, iPos1, iPos2, iSum1 = 0, iSum2 = 0, iData, iDataNum, iDataDec;
-  float fMax = -100, fMin = 1000, iGAPGx1 , iGAPGx2 , iGAPX , iGAPY , iSTEPY , fGraphY;
-  bool bD1 = false, bD2 = false;
+  int i, iMaxData = 24;
+  float fMax = -100, fMin = 1000;
   String sAux;
-  for (i = 1; i < 24; i++) {
-    iSum1 = iSum1 + fPriceHour[i];
+  if (iMode == 4) iMaxData = 31;
+  if ((!bWeHaveGoodData) || (iMode == 5)) {
+    Serial.println("\n NEW LOAD badData\n");
+    bWeHaveGoodData = bGetData(tNow, iMode);
   }
-  bD1 = (iSum1 > 0);
-  if (!bD1) {
-    Serial.println("\n NEW LOAD DB=0\n");
-    bGetData(tNow);
-    for (i = 0; i < 24; i++) {
-      iSum1 = iSum1 + fPriceHour[i];
-    }
-    bD1 = (iSum1 > 0);
-  }
-  for (i = 0; i < 24; i++) {
-    //Serial.printf("\n i=%d Data=%f <%f,%f>", i, fPriceHour[i], fMin, fMax);
-    if (bD1) {
-      if (fPriceHour[i] > fMax) fMax = fPriceHour[i];
-      if (fPriceHour[i] < fMin) fMin = fPriceHour[i];
-    }
-  }
-  iData = 100 * fPriceHour[hour(tNow)];
-  //iData = 8426;
-  iDataNum = iData / 100;
-  iDataDec = iData % 100;
-  //Modes
-  Serial.printf(" Display mode=%d Hour=%d Data=%f <%f,%f>\n", iMode, hour(tNow), fPriceHour[hour(tNow)], fMin, fMax);
+  if (iMode == 5) bWeHaveGoodData = true; //clock
   display.fillScreen(GxEPD_WHITE);
   display.setTextColor(GxEPD_BLACK);
-  if (!bD1) sRefreshText = sRefreshText + " NO DATA";
+  display.setRotation(1);
+  if (!bWeHaveGoodData) sRefreshText = sRefreshText + " NO DATA";
   if (sRefreshText.length() > 0) {
-    display.setRotation(1);
+    Serial.println("\n" + sRefreshText + "\n");
     DisplayTextAligned(display.width() / 2 , display.height() - 10, sRefreshText, 0, 10);
     sRefreshText = "";
+  }
+  if (!bWeHaveGoodData) {
     display.update();
+    return;
+  }
+  //Modes
+  for (i = 0; i < iMaxData; i++) {
+    if (fPriceData[i] > fMax) fMax = fPriceData[i];
+    if (fPriceData[i] < fMin) fMin = fPriceData[i];
   }
   int iMillIn = millis();
-  if (bD1) {
-    if (iMode < 2) { //////////// VERTICAL MODE /////////////////////////////////////////
-      // Now
-      display.setRotation(0);
-      iScreenXMax = display.width() ;
-      iScreenYMax = display.height();
-      fScreenXMax = (float)(display.width()) / 104.0f;
-      fScreenYMax = (float)(display.height()) / 212.0f;
-      iGAPGx1 = 5.0 * fScreenXMax;
-      iGAPGx2 = 30.0 * fScreenXMax;
-      iGAPX = 35.0 * fScreenXMax;
-      iGAPY = 46.0 * fScreenYMax;
-      iSTEPY = 6.4 * fScreenYMax;
-
-      // VBAT
-      if (iVBAT > 1) {
-        display.fillRect(3, iGAPY - 2, VBATW - 6, 2, GxEPD_BLACK);
-        display.fillRect(1, iGAPY - 1, VBATW - 2,  iScreenYMax * 0.07f, GxEPD_BLACK);
-        display.fillRect(2, iGAPY + 0, VBATW - 4,  iScreenYMax * 0.07f - 2 , GxEPD_WHITE);
-        display.fillRect(3, iGAPY + 1 + ((iScreenYMax * 0.07f - 4) * (100 - iVBAT) / 100), VBATW - 6, ((iScreenYMax * 0.07f - 4)*iVBAT / 100) , GxEPD_BLACK);
-        DisplayTextAligned(5 + VBATW , (iGAPY - 2), "eur/MWh", 1, 10);
-        display.setFont(&FreeMono9pt7b);
-        if (iMode % 2) {
-          DisplayTextAligned(3 + VBATW , (iGAPY + 0.06f * iScreenYMax), "esios", 1, 10);
-        } else {
-          DisplayTextAligned(3 + VBATW , (iGAPY + 0.06f * iScreenYMax), "omie", 1, 10);
-        }
-      } else {
-        display.setFont(&FreeMonoBold9pt7b);
-        DisplayTextAligned(1 , (iGAPY + 0.06f * iScreenYMax), "LOW BATT", 1, 10);
-      }
-
-      //Now
-      display.setFont(&FreeMonoBold24pt7b);
-      if ((iDataNum > 99) || (iDataDec == 0)) {
-        DisplayTextAligned(iScreenXMax * 0.5f, fScreenYMax * 32.0f , (String)(iDataNum), 0, 6);
-      } else {
-        String sDec = "." + (String)(iDataDec);
-        if (iDataDec  < 10) sDec = ".0" + (String)(iDataDec);
-        if (iDataNum > 9) {
-          DisplayTextAligned(iScreenXMax * 0.68f, fScreenYMax * 32.0f , (String)(iDataNum), -1, 5);
-          display.setFont(&FreeMonoBold9pt7b);
-          DisplayTextAligned(iScreenXMax * 0.7f , fScreenYMax * 32.0f , sDec, 1, 10);
-        } else {
-          DisplayTextAligned(iScreenXMax * 0.48f, fScreenYMax * 32.0f , (String)(iDataNum), -1, 6);
-          display.setFont(&FreeMonoBold9pt7b);
-          DisplayTextAligned(iScreenXMax * 0.6f , fScreenYMax * 32.0f , sDec, 1, 10);
-        }
-      }
-      //CAPT
-      if ((!(iMode % 2)) && (fCaptOMIE > -100)) {
-        display.setFont(&FreeMonoBold18pt7b);
-        DisplayTextAligned(iScreenXMax * 0.35f, iScreenYMax * 0.66f , (String)((int)(fCaptOMIE)), 0, 6);
-        drawBar(0, iScreenYMax * 0.66f, iScreenXMax, iScreenYMax * 0.3f , 2, GxEPD_WHITE);
-      }
-
-      //Bottom
-      display.setFont(&FreeMono9pt7b);
-      DisplayTextAligned(iScreenXMax * 0.5f, iScreenYMax * 0.98f,  "<D" + int2str2dig(day(tNow)) + "<", 0, 11);
-      display.setFont(&FreeMonoBold9pt7b);
-      DisplayTextAligned(iScreenXMax * 0.02f, iScreenYMax * 0.98f, float2string(fMin, 0), 1, 12);
-      DisplayTextAligned(iScreenXMax , iScreenYMax * 0.98f, float2string(fMax, 0), -1, 12);
-
-      //Hours
-      display.fillRect(5, (iGAPY + (hour(tNow) * iSTEPY) + 1), iScreenXMax - 5,  2, GxEPD_BLACK);
-      display.setFont(&FreeMonoBold9pt7b);
-      for (i = 0; i < 24; i++) {
-        if (!(i % 6)) { //hour text
-          DisplayTextAligned(iScreenXMax, (iGAPY - 2 + iSTEPY + (i * iSTEPY)), (String)(i) + "h", -1, 12);
-        }
-        //Line
-        iPos1 = iGAPGx1 + ((float)(iScreenXMax -  iGAPGx2 ) * (fPriceHour[i] - fMin)) / (fMax - fMin);
-        display.fillRect(iPos1 - 3, (iGAPY + (i * iSTEPY)), 3,  3, GxEPD_BLACK);
-        if (i < 23) {
-          iPos1 = iGAPGx1 - 3 + ((float)(iScreenXMax - iGAPGx2 ) * (fPriceHour[i] - fMin)) / (fMax - fMin);
-          iPos2 = iGAPGx1 - 3 + ((float)(iScreenXMax - iGAPGx2 ) * (fPriceHour[i + 1] - fMin)) / (fMax - fMin);
-          drawLine(iPos1 + 1, (iGAPY + (i * iSTEPY) + 1), iPos2 + 1, (iGAPY + iSTEPY + (i * iSTEPY) + 1));
-          drawLine(iPos1 + 1, (iGAPY + (i * iSTEPY) + 2), iPos2 + 1, (iGAPY + iSTEPY + (i * iSTEPY) + 2));
-        }
-      }
-      //Box SEL
-      iPos1 = iGAPGx1 - 4 + ((float)(iScreenXMax - iGAPGx2) * (fPriceHour[hour(tNow) ] - fMin)) / (fMax - fMin);
-      display.fillRect(iPos1 - 1, (iGAPY + (hour(tNow) * iSTEPY) - 1), 6,  6 , GxEPD_BLACK);
-      display.fillRect(iPos1 + 1, (iGAPY + (hour(tNow) * iSTEPY) + 1), 2,  2 , GxEPD_WHITE);
-    } else { // H O R I Z O N T A L /////////////////////////////////////////////////////
-      ///////////////////////////////////////////////////////////////////////////////////
-      display.setRotation(0);
-      iScreenXMax = display.width() ;
-      iScreenYMax = display.height();
-      fScreenXMax = (float)(display.width()) / 104.0f;
-      fScreenYMax = (float)(display.height()) / 212.0f;
-      iGAPGx1 = 5.0 * fScreenXMax;
-      iGAPGx2 = 30.0 * fScreenXMax;
-      iGAPX = 35.0 * fScreenXMax;
-      iGAPY = 80.0 * fScreenYMax;
-      iSTEPY = 5.4 * fScreenYMax;
-      //Hours
-      display.fillRect(5, (iGAPY + (hour(tNow) * iSTEPY) + 1), iScreenXMax - 5,  2, GxEPD_BLACK);
-      for (i = 0; i < 24; i++) {
-        if (!(i % 6)) { //hour text
-          if (i == 0) {
-            sAux = "D" + int2str2dig(day(tNow ));
-          } else {
-            sAux = (String)(i) + "h";
-          }
-          DisplayTextAligned(iScreenXMax * 0.98f, (iGAPY - 4 + iSTEPY + (i * iSTEPY)), sAux, -1, 12);
-        }
-      }
-      DisplayTextAligned(iScreenXMax * 0.98f, iScreenYMax * 0.97f,  "D" + int2str2dig(day(tNow + 86400)), -1, 12); //Next day
-      /////////////////////////////////////////
-      // Then rotate texts
-      display.setRotation(1);
-      iScreenXMax = display.width() ;
-      iScreenYMax = display.height();
-      fScreenXMax = (float)(display.width()) / 212.0f;
-      fScreenYMax = (float)(display.height()) / 104.0f;
-      iGAPGx1 = 0.0 * fScreenXMax;
-      iGAPGx2 = 15.0 * fScreenXMax;
-      iGAPX = 35.0 * fScreenXMax;
-      iGAPY = 90.0 * fScreenYMax;
-      iSTEPY = 5.0 * fScreenYMax;
-
-      // VBAT
-      if (iVBAT > 0) {
-        display.fillRect(iScreenXMax * 0.17f + 2, iScreenYMax * 0.83f - 1, VBATW - 6, 2, GxEPD_BLACK);
-        display.fillRect(iScreenXMax * 0.17f, iScreenYMax * 0.83f, VBATW - 2,  iScreenYMax * 0.18f, GxEPD_BLACK);
-        display.fillRect(iScreenXMax * 0.17f + 1, iScreenYMax * 0.83f + 1, VBATW - 4,  iScreenYMax * 0.16f , GxEPD_WHITE);
-        display.fillRect(iScreenXMax * 0.17f + 2 , iScreenYMax * 0.83f + 2 + (v213 ? 0 : 0) + ((iScreenYMax * 0.15f) * (100 - iVBAT) / 100), VBATW - 6, ((iScreenYMax * 0.15f)*iVBAT / 100) - (v213 ? 1 : 0) , GxEPD_BLACK);
-        DisplayTextAligned(iScreenXMax * 0.22f, iScreenYMax * 0.83f, "eur/MWh", 1, 10);
-        if ((!(iMode % 2)) && (fCaptOMIE > -100)) {
-          DisplayTextAligned(iScreenXMax * (CAPT_HX + 0.03f) , iScreenYMax * (CAPT_HY + 0.04f), "solar", 0, 6);
-        }
-        display.setFont(&FreeMono9pt7b);
-        if (iMode % 2) {
-          DisplayTextAligned(iScreenXMax * 0.22f , iScreenYMax * 0.98f, "esios", 1, 10);
-        } else {
-          DisplayTextAligned(iScreenXMax * 0.22f , iScreenYMax * 0.98f, "omie", 1, 10);
-        }
-      } else {
-        display.setFont(&FreeMonoBold9pt7b);
-        DisplayTextAligned(iScreenXMax * 0.22f , iScreenYMax * 0.98f, "LOW BATT", 1, 10);
-      }
-
-      //Now
-      display.setFont(&FreeMonoBold24pt7b);
-      if ((iDataNum > 99) || (iDataDec  == 0)) {
-        DisplayTextAligned(fScreenXMax * 6.0f, fScreenYMax * 62.0f , (String)(iDataNum), 1, 6);
-      } else {
-        String sDec = "." + (String)(iDataDec );
-        if (iDataDec < 10) sDec = ".0" + (String)(iDataDec );
-        if (iDataNum > 9) {
-          DisplayTextAligned(fScreenXMax * 25.0f, fScreenYMax * 62.0f , (String)(iDataNum), -1, 5);
-          display.setFont(&FreeMonoBold9pt7b);
-          DisplayTextAligned(fScreenXMax * 46.0f , fScreenYMax * 62.0f , sDec, 1, 10);
-        } else {
-          DisplayTextAligned(fScreenXMax * 25.0f, fScreenYMax * 62.0f , (String)(iDataNum), -1, 6);
-          display.setFont(&FreeMonoBold9pt7b);
-          DisplayTextAligned(fScreenXMax * 46.0f , fScreenYMax * 62.0f , sDec, 1, 10);
-        }
-      }
-      //Limits
-      display.setFont(&FreeMonoBold9pt7b);
-      DisplayTextAligned(iScreenXMax * 0.15f, iScreenYMax * 0.10f, float2string(fMax, 0), -1, 12);
-      DisplayTextAligned(iScreenXMax * 0.15f, iScreenYMax * 0.98f, float2string(fMin, 0), -1, 12);
-      //CAPT
-      if ((!(iMode % 2)) && (fCaptOMIE > -100)) {
-        display.setFont(&FreeMonoBold18pt7b);
-        DisplayTextAligned(iScreenXMax * CAPT_HX , iScreenYMax * CAPT_HY , (String)((int)(fCaptOMIE)), 0, 6);
-        drawBar(iScreenXMax * (CAPT_HX - 0.26f), iScreenYMax * 0.2f, iScreenXMax * (CAPT_HX + 0.27f), iScreenYMax * (CAPT_HY + 0.01f) , 2, GxEPD_WHITE);
-      }
-      // HORIZONTAL GRAPH LAST
-      // LINES
-      display.setRotation(0);
-      iScreenXMax = display.width() ;
-      iScreenYMax = display.height();
-      fScreenXMax = (float)(display.width()) / 104.0f;
-      fScreenYMax = (float)(display.height()) / 212.0f;
-      iGAPGx1 = 5.0 * fScreenXMax;
-      iGAPGx2 = 30.0 * fScreenXMax;
-      iGAPX = 35.0 * fScreenXMax;
-      iGAPY = 80.0 * fScreenYMax;
-      iSTEPY = 5.4 * fScreenYMax;
-
-      // Then GRAPH
-      display.fillRect(5, (iGAPY + (hour(tNow) * iSTEPY) + 1), iScreenXMax - 5,  2, GxEPD_BLACK);
-      for (i = 0; i < 24; i++) {
-        //Line
-        iPos1 = iGAPGx1 + ((float)(iScreenXMax -  iGAPGx2 ) * (fPriceHour[i] - fMin)) / (fMax - fMin);
-        display.fillRect(iPos1 - 3, (iGAPY + (i * iSTEPY)), 3,  3, GxEPD_BLACK);
-        if (i < 23) {
-          iPos1 = iGAPGx1 - 3 + ((float)(iScreenXMax - iGAPGx2 ) * (fPriceHour[i] - fMin)) / (fMax - fMin);
-          iPos2 = iGAPGx1 - 3 + ((float)(iScreenXMax - iGAPGx2 ) * (fPriceHour[i + 1] - fMin)) / (fMax - fMin);
-          drawLine(iPos1 + 1, (iGAPY + (i * iSTEPY) + 1), iPos2 + 1, (iGAPY + iSTEPY + (i * iSTEPY) + 1));
-          drawLine(iPos1 + 1, (iGAPY + (i * iSTEPY) + 2), iPos2 + 1, (iGAPY + iSTEPY + (i * iSTEPY) + 2));
-        }
-      }
-      //Box SEL
-      iPos1 = iGAPGx1 - 3 + ((float)(iScreenXMax - iGAPGx2) * (fPriceHour[hour(tNow) ] - fMin)) / (fMax - fMin);
-      display.fillRect(iPos1 - 1, (iGAPY + (hour(tNow) * iSTEPY) - 1), 6,  6 , GxEPD_BLACK);
-      display.fillRect(iPos1 + 1, (iGAPY + (hour(tNow) * iSTEPY) + 1), 2,  2 , GxEPD_WHITE);
-    }
-    display.update();
+  switch (iMode) {
+    case 0: bShowVerticalESIOS_OMIE_D(fMin, fMax);
+      break;
+    case 1: bShowVerticalESIOS_OMIE_D(fMin, fMax);
+      break;
+    case 2: bShowHorizontalESIOS_OMIE_D(fMin, fMax);
+      break;
+    case 3: bShowHorizontalESIOS_OMIE_D(fMin, fMax);
+      break;
+    case 4: bShowOMIE_M(fMin, fMax);
+      break;
+    case 5: //Just show clock
+      break;
+    default: //Just show clock
+      break;
   }
+  display.update();
   Serial.printf(" Display took %f sec. \n", (float)(millis() - iMillIn) / 1000.0f);
 }
 //////////////////////////////////////////////////////////////////////////////
+bool bShowOMIE_M(float fMin, float fMax) {
+  int i, iPos1, iPos2, tBase, tDate , iMonth = 0;
+  float iGAPGx1 , iGAPGx2 , iGAPY , iSTEPY, fMean = 0, fMonth = 0, fBattX = 0.3f;
+  char* sMonth[] = {"JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AGO", "SEP", "OCT", "NOV", "DEC"};
+  display.setRotation(0);
+  iScreenXMax = display.width() ;
+  iScreenYMax = display.height();
+  fScreenXMax = (float)(display.width()) / 104.0f;
+  fScreenYMax = (float)(display.height()) / 212.0f;
+  iGAPGx1 = 5.0 * fScreenXMax;
+  iGAPGx2 = 30.0 * fScreenXMax;
+  iGAPY = 82.0 * fScreenYMax;
+  iSTEPY = 4.3 * fScreenYMax;
+
+  DisplayTextAligned( iScreenXMax * 0.01f , iScreenYMax * 0.02f, "min", 0, 6);
+  DisplayTextAligned( iScreenXMax * 0.41f , iScreenYMax * 0.02f, "today", 0, 6);
+  DisplayTextAligned( iScreenXMax * 0.86f , iScreenYMax * 0.02f, "max", 0, 6);
+  DisplayTextAligned( iScreenXMax * 0.01f , iScreenYMax * 0.06f, "31D", 0, 6);
+  DisplayTextAligned( iScreenXMax * 0.41f , iScreenYMax * 0.06f, "solar", 0, 6);
+  DisplayTextAligned( iScreenXMax * 0.86f , iScreenYMax * 0.06f, "31D", 0, 6);
+
+  DisplayTextAligned( iScreenXMax * 0.83f , iScreenYMax * 0.38f, "avg", 1, 6);
+  DisplayTextAligned( iScreenXMax * 0.83f , iScreenYMax * 0.42f, "31D", 1, 6);
+  DisplayTextAligned( iScreenXMax * 0.83f , iScreenYMax * 0.68f, "avg", 1, 6);
+  DisplayTextAligned( iScreenXMax * 0.83f , iScreenYMax * 0.72f, (String)(sMonth[month(tNow) - 1]), 1, 6);
+  tBase = tNow;
+  if (hour(tBase) < 2) tBase += 7200;
+  if (hour(tBase) > 22) tBase -= 7200;
+  for (i = 0; i < 31; i++) {
+    if (month(tBase - ((30 - i) * 86400)) == month(tBase)) {
+      iMonth++;
+      fMonth = fMonth + fPriceData[i];
+    }
+    fMean = fMean + fPriceData[i];
+    //    Serial.printf(" +%f=%f,", fPriceData[i], fMean);
+  }
+  fMonth = fMonth / iMonth;
+  fMean = fMean / 31;
+  //  Serial.printf(" OMIE_m: month[%d days]=%f, avg 31D=%f - ", iMonth, fMonth, fMean);
+  // Curve
+  for (i = 0; i < 31; i++) {
+    iPos1 = iGAPGx1 + ((float)(iScreenXMax -  iGAPGx2 ) * (fPriceData[i] - fMin)) / (fMax - fMin);
+    display.fillRect(iPos1 - 3, (iGAPY + (i * iSTEPY)), 3,  3, GxEPD_BLACK);
+    if (i < 30) {
+      iPos1 = iGAPGx1 - 3 + ((float)(iScreenXMax - iGAPGx2 ) * (fPriceData[i] - fMin)) / (fMax - fMin);
+      iPos2 = iGAPGx1 - 3 + ((float)(iScreenXMax - iGAPGx2 ) * (fPriceData[i + 1] - fMin)) / (fMax - fMin);
+      drawLine(iPos1 + 1, (iGAPY + (i * iSTEPY) + 1), iPos2 + 1, (iGAPY + iSTEPY + (i * iSTEPY) + 1));
+      drawLine(iPos1 + 1, (iGAPY + (i * iSTEPY) + 2), iPos2 + 1, (iGAPY + iSTEPY + (i * iSTEPY) + 2));
+    }
+    if (weekday(tBase - ((30 - i) * 86400)) == 0) {
+      drawBar(iGAPGx1, (iGAPY + (i * iSTEPY) ), iScreenXMax - iGAPGx2, (iGAPY + (i * iSTEPY) + 2) , 2, GxEPD_BLACK);
+    }
+    if (day(tBase - ((30 - i) * 86400)) == 1) {
+      drawBar(iGAPGx1, (iGAPY + (i * iSTEPY)), iScreenXMax - iGAPGx2, (iGAPY + (i * iSTEPY) + 3) , 1, GxEPD_BLACK);
+    }
+  }
+  // HORIZ
+  display.setRotation(1);
+  iScreenXMax = display.width() ;
+  iScreenYMax = display.height();
+  DisplayTextAligned(iScreenXMax * 0.62f, iScreenYMax * 0.95f , "SPEL SOLAR", 0, 6);
+  display.setFont(&FreeMonoBold24pt7b);
+  DisplayTextAligned(iScreenXMax * 0.11f, iScreenYMax * 0.64f , (String)(int)(round(fPriceData[30])), 1, 6);
+  display.setFont(&FreeMonoBold18pt7b);
+  DisplayTextAligned(iScreenXMax * 0.45f, iScreenYMax * 0.19f , (String)(int)(round(fMean)), 1, 6);
+  DisplayTextAligned(iScreenXMax * 0.75f, iScreenYMax * 0.19f , (String)(int)(round(fMonth)), 1, 6);
+  display.setFont(&FreeMonoBold12pt7b);
+  DisplayTextAligned(iScreenXMax * 0.11f, iScreenYMax * 0.16f , (String)(int)(round(fMax)), 1, 6);
+  DisplayTextAligned(iScreenXMax * 0.11f, iScreenYMax * 0.99f , (String)(int)(round(fMin)), 1, 6);
+
+  drawBar(iScreenXMax * .10f, iScreenYMax * 0.0f, iScreenXMax * .28f, iScreenYMax * 0.3f , 2, GxEPD_WHITE);
+  drawBar(iScreenXMax * .10f, iScreenYMax * 0.7f, iScreenXMax * .28f, iScreenYMax  , 2, GxEPD_WHITE);
+  drawBar(iScreenXMax * .46f, iScreenYMax * 0.0f, iScreenXMax * .65f, iScreenYMax * 0.3f , 2, GxEPD_WHITE);
+
+  // VBAT
+  if (iVBAT > 0) {
+    display.fillRect(iScreenXMax * fBattX + 2, iScreenYMax * 0.83f - 1, VBATW - 6, 2, GxEPD_BLACK);
+    display.fillRect(iScreenXMax * fBattX, iScreenYMax * 0.83f, VBATW - 2,  iScreenYMax * 0.18f, GxEPD_BLACK);
+    display.fillRect(iScreenXMax * fBattX + 1, iScreenYMax * 0.83f + 1, VBATW - 4,  iScreenYMax * 0.16f , GxEPD_WHITE);
+    display.fillRect(iScreenXMax * fBattX + 2 , iScreenYMax * 0.83f + 2  + ((iScreenYMax * 0.15f) * (100 - iVBAT) / 100), VBATW - 6, ((iScreenYMax * 0.15f)*iVBAT / 100) - ((iVersion > 1) ? 1 : 0) , GxEPD_BLACK);
+  } else {
+    display.setFont(&FreeMonoBold9pt7b);
+    DisplayTextAligned(iScreenXMax * 0.35f, iScreenYMax * 0.99f , "low BATT", 1, 6);
+  }
+}
+//////////////////////////////////////////////////////////////////////////////
+bool bShowVerticalESIOS_OMIE_D(float fMin, float fMax) {
+  int i, iPos1, iPos2, iSum1 = 0, iSum2 = 0, iData, iDataNum, iDataDec;
+  float iGAPGx1 , iGAPGx2 , iGAPX , iGAPY , iSTEPY , fGraphY;
+  String sAux;
+
+  iData = 100 * fPriceData[hour(tNow)];
+  //iData = 8426;
+  iDataNum = iData / 100;
+  iDataDec = iData % 100;
+  Serial.printf(" Display mode=%d Hour=%d Data=%f <%f,%f>\n", iMode, hour(tNow), fPriceData[hour(tNow)], fMin, fMax);
+
+  // Now
+  display.setRotation(0);
+  iScreenXMax = display.width() ;
+  iScreenYMax = display.height();
+  fScreenXMax = (float)(display.width()) / 104.0f;
+  fScreenYMax = (float)(display.height()) / 212.0f;
+  iGAPGx1 = 5.0 * fScreenXMax;
+  iGAPGx2 = 30.0 * fScreenXMax;
+  iGAPX = 35.0 * fScreenXMax;
+  iGAPY = 47.0 * fScreenYMax;
+  iSTEPY = 6.5 * fScreenYMax;
+  if ((iMode  == 1) && (fCaptOMIE > -100)) {
+    DisplayTextAligned( iScreenXMax * 0.45f , iScreenYMax * 0.68f, "solar", 0, 6);
+  }
+  DisplayTextAligned(iScreenXMax, (iGAPY - 8 + iSTEPY + (0 * iSTEPY)), (String)(day(tNow)) + "D", -1, 12); //Day
+  for (i = 1; i < 24; i++) {
+    if ((!(i % 6) && (abs(hour(tNow) - i) > 1))) { //hour text
+      DisplayTextAligned(iScreenXMax, (iGAPY - 8 + iSTEPY + (i * iSTEPY)), (String)(i) + "h", -1, 12);
+    }
+  }
+  DisplayTextAligned(iScreenXMax * 0.5f, iScreenYMax * 0.96f,  "min/max", 0, 11);
+  // VBAT
+  if (iVBAT > 1) {
+    DisplayTextAligned(iScreenXMax * 0.65f , iScreenYMax * 0.17f, "eur/MWh", 1, 10);
+    display.fillRect(3, iScreenYMax * 0.17f - 2, VBATW - 6, 2, GxEPD_BLACK);
+    display.fillRect(1, iScreenYMax * 0.17f - 1, VBATW - 2,  iScreenYMax * 0.07f, GxEPD_BLACK);
+    display.fillRect(2, iScreenYMax * 0.17f - 0, VBATW - 4,  iScreenYMax * 0.07f - 2 , GxEPD_WHITE);
+    display.fillRect(3, iScreenYMax * 0.17f + 1 + ((iScreenYMax * 0.07f - 4) * (100 - iVBAT) / 100), VBATW - 6, ((iScreenYMax * 0.07f - 4)*iVBAT / 100) , GxEPD_BLACK);
+    switch (iMode) {
+      case 0: DisplayTextAligned(3 + VBATW , iScreenYMax * 0.17f, "esios", 1, 10);
+        break;
+      case 1: DisplayTextAligned(3 + VBATW , iScreenYMax * 0.17f, "omieD", 1, 10);
+        break;
+    }
+  } else {
+    display.setFont(&FreeMonoBold9pt7b);
+    DisplayTextAligned(1 , (iGAPY + 0.06f * iScreenYMax), "LOW BATT", 1, 10);
+  }
+  //Now
+  display.setFont(&FreeMonoBold24pt7b);
+  if ((iDataNum > 99) || (iDataDec == 0)) {
+    DisplayTextAligned(iScreenXMax * 0.5f, fScreenYMax * 31.0f , (String)(int)(round(fPriceData[hour(tNow)])), 0, 6);
+  } else {
+    String sDec = "." + (String)(iDataDec);
+    if (iDataDec  < 10) sDec = ".0" + (String)(iDataDec);
+    if (iDataNum > 9) {
+      DisplayTextAligned(iScreenXMax * 0.68f, fScreenYMax * 31.0f , (String)(iDataNum), -1, 5);
+      display.setFont(&FreeMonoBold9pt7b);
+      DisplayTextAligned(iScreenXMax * 0.7f , fScreenYMax * 31.0f , sDec, 1, 10);
+    } else {
+      DisplayTextAligned(iScreenXMax * 0.48f, fScreenYMax * 31.0f , (String)(iDataNum), -1, 6);
+      display.setFont(&FreeMonoBold9pt7b);
+      DisplayTextAligned(iScreenXMax * 0.6f , fScreenYMax * 31.0f , sDec, 1, 10);
+    }
+  }
+  //CAPT
+  if ((iMode == 1) && (fCaptOMIE > -100)) {
+    display.setFont(&FreeMonoBold18pt7b);
+    DisplayTextAligned(iScreenXMax * 0.41f, iScreenYMax * 0.66f , (String)(int)(round(fCaptOMIE)), 0, 6);
+    drawBar(iScreenXMax * .3f, iScreenYMax * 0.4f, iScreenXMax * .8f, iScreenYMax * 0.68f , 2, GxEPD_WHITE);
+  }
+  //Bottom
+  display.setFont(&FreeMonoBold9pt7b);
+  DisplayTextAligned(iScreenXMax * 0.02f, iScreenYMax * 0.98f, float2string(fMin, 0), 1, 12);
+  DisplayTextAligned(iScreenXMax , iScreenYMax * 0.98f, float2string(fMax, 0), -1, 12);
+  //Hours
+  display.fillRect(2, (iGAPY + (hour(tNow) * iSTEPY) + 1), iScreenXMax - iGAPGx2 - 3,  2, GxEPD_BLACK); //Hour line
+  display.setFont(&FreeMonoBold9pt7b);
+  DisplayTextAligned(iScreenXMax, (iGAPY - 2 + iSTEPY + (hour(tNow) * iSTEPY)), (String)(hour(tNow)) + "h", -1, 12); //Now
+  // curve
+  for (i = 0; i < 24; i++) {
+    iPos1 = iGAPGx1 + ((float)(iScreenXMax -  iGAPGx2 ) * (fPriceData[i] - fMin)) / (fMax - fMin);     //dot
+    display.fillRect(iPos1 - 3, (iGAPY + (i * iSTEPY)), 3,  3, GxEPD_BLACK);
+    if (i < 23) {     //line
+      iPos1 = iGAPGx1 - 3 + ((float)(iScreenXMax - iGAPGx2 ) * (fPriceData[i] - fMin)) / (fMax - fMin);
+      iPos2 = iGAPGx1 - 3 + ((float)(iScreenXMax - iGAPGx2 ) * (fPriceData[i + 1] - fMin)) / (fMax - fMin);
+      drawLine(iPos1 + 1, (iGAPY + (i * iSTEPY) + 1), iPos2 + 1, (iGAPY + iSTEPY + (i * iSTEPY) + 1));
+      drawLine(iPos1 + 1, (iGAPY + (i * iSTEPY) + 2), iPos2 + 1, (iGAPY + iSTEPY + (i * iSTEPY) + 2));
+    }
+  }
+  //Box SEL
+  iPos1 = iGAPGx1 - 4 + ((float)(iScreenXMax - iGAPGx2) * (fPriceData[hour(tNow) ] - fMin)) / (fMax - fMin);
+  display.fillRect(iPos1 - 1, (iGAPY + (hour(tNow) * iSTEPY) - 1), 6,  6 , GxEPD_BLACK);
+  display.fillRect(iPos1 + 1, (iGAPY + (hour(tNow) * iSTEPY) + 1), 2,  2 , GxEPD_WHITE);
+}
+//////////////////////////////////////////////////////////////////////////////
+bool bShowHorizontalESIOS_OMIE_D(float fMin, float fMax) {
+  int i, iPos1, iPos2, iSum1 = 0, iSum2 = 0, iData, iDataNum, iDataDec;
+  float iGAPGx1 , iGAPGx2 , iGAPX , iGAPY , iSTEPY , fGraphY;
+  String sAux;
+
+  iData = 100 * fPriceData[hour(tNow)];
+  //iData = 8426;
+  iDataNum = iData / 100;
+  iDataDec = iData % 100;
+  Serial.printf(" Display mode=%d Hour=%d Data=%f <%f,%f>\n", iMode, hour(tNow), fPriceData[hour(tNow)], fMin, fMax);
+
+  display.setRotation(0);
+  iScreenXMax = display.width() ;
+  iScreenYMax = display.height();
+  fScreenXMax = (float)(display.width()) / 104.0f;
+  fScreenYMax = (float)(display.height()) / 212.0f;
+  iGAPGx1 = 5.0 * fScreenXMax;
+  iGAPGx2 = 30.0 * fScreenXMax;
+  iGAPX = 35.0 * fScreenXMax;
+  iGAPY = 80.0 * fScreenYMax;
+  iSTEPY = 5.45 * fScreenYMax;
+  //Hours
+  for (i = 0; i < 24; i++) {
+    if ((!(i % 6) && (abs(hour(tNow) - i) > 1))) { //hour text
+      if (i == 0) {
+        sAux = "D" + int2str2dig(day(tNow ));
+      } else {
+        sAux = (String)(i) + "h";
+      }
+      DisplayTextAligned(iScreenXMax * 0.98f, (iGAPY - 6 + iSTEPY + ((i - 1) * iSTEPY)), sAux, -1, 12);
+    }
+  }
+  DisplayTextAligned(iScreenXMax * 0.98f, iScreenYMax * 0.97f,  "D" + int2str2dig(day(tNow + 86400)), -1, 12); //Next day
+  /////////////////////////////////////////
+  // Then rotate texts
+  display.setRotation(1);
+  iScreenXMax = display.width() ;
+  iScreenYMax = display.height();
+  fScreenXMax = (float)(display.width()) / 212.0f;
+  fScreenYMax = (float)(display.height()) / 104.0f;
+  iGAPGx1 = 0.0 * fScreenXMax;
+  iGAPGx2 = 15.0 * fScreenXMax;
+  iGAPX = 35.0 * fScreenXMax;
+  iGAPY = 90.0 * fScreenYMax;
+  iSTEPY = 5.45 * fScreenYMax;
+  if ((iMode  == 3) && (fCaptOMIE > -100)) {
+    DisplayTextAligned(iScreenXMax * (CAPT_HX + 0.03f) , iScreenYMax * (CAPT_HY + 0.04f), "solar", 0, 6);
+  }
+  // VBAT
+  if (iVBAT > 0) {
+    display.fillRect(iScreenXMax * 0.17f + 2, iScreenYMax * 0.83f - 1, VBATW - 6, 2, GxEPD_BLACK);
+    display.fillRect(iScreenXMax * 0.17f, iScreenYMax * 0.83f, VBATW - 2,  iScreenYMax * 0.18f, GxEPD_BLACK);
+    display.fillRect(iScreenXMax * 0.17f + 1, iScreenYMax * 0.83f + 1, VBATW - 4,  iScreenYMax * 0.16f , GxEPD_WHITE);
+    display.fillRect(iScreenXMax * 0.17f + 2 , iScreenYMax * 0.83f + 2 + ((iVersion > 1) ? 0 : 0) + ((iScreenYMax * 0.15f) * (100 - iVBAT) / 100), VBATW - 6, ((iScreenYMax * 0.15f)*iVBAT / 100) - ((iVersion > 1) ? 1 : 0) , GxEPD_BLACK);
+    DisplayTextAligned(iScreenXMax * 0.22f, iScreenYMax * 0.94f, "eur/MWh", 1, 10);
+    switch (iMode) {
+      case 2: DisplayTextAligned(iScreenXMax * 0.22f, iScreenYMax * 0.86f, "esios", 1, 10);
+        break;
+      case 3: DisplayTextAligned(iScreenXMax * 0.22f, iScreenYMax * 0.86f, "omieD", 1, 10);
+        break;
+    }
+  } else {
+    display.setFont(&FreeMonoBold9pt7b);
+    DisplayTextAligned(iScreenXMax * 0.22f , iScreenYMax * 0.98f, "LOW BATT", 1, 10);
+  }
+  //Now
+  display.setFont(&FreeMonoBold24pt7b);
+  if ((iDataNum > 99) || (iDataDec  == 0)) {
+    DisplayTextAligned(fScreenXMax * 6.0f, fScreenYMax * 62.0f , (String)(int)(round(fPriceData[hour(tNow)])), 1, 6);
+  } else {
+    String sDec = "." + (String)(iDataDec );
+    if (iDataDec < 10) sDec = ".0" + (String)(iDataDec );
+    if (iDataNum > 9) {
+      DisplayTextAligned(fScreenXMax * 25.0f, fScreenYMax * 62.0f , (String)(iDataNum), -1, 5);
+      display.setFont(&FreeMonoBold9pt7b);
+      DisplayTextAligned(fScreenXMax * 47.0f , fScreenYMax * 62.0f , sDec, 1, 10);
+    } else {
+      DisplayTextAligned(fScreenXMax * 25.0f, fScreenYMax * 62.0f , (String)(iDataNum), -1, 6);
+      display.setFont(&FreeMonoBold9pt7b);
+      DisplayTextAligned(fScreenXMax * 47.0f , fScreenYMax * 62.0f , sDec, 1, 10);
+    }
+  }
+  //Limits
+  display.setFont(&FreeMonoBold9pt7b);
+  DisplayTextAligned(iScreenXMax * 0.15f, iScreenYMax * 0.10f, float2string(fMax, 0), -1, 12);
+  DisplayTextAligned(iScreenXMax * 0.15f, iScreenYMax * 0.98f, float2string(fMin, 0), -1, 12);
+  //CAPT
+  if ((iMode == 3) && (fCaptOMIE > -100)) {
+    display.setFont(&FreeMonoBold18pt7b);
+    DisplayTextAligned(iScreenXMax * CAPT_HX , iScreenYMax * CAPT_HY ,  (String)(int)(round(fCaptOMIE)), 0, 6);
+    drawBar(iScreenXMax * (CAPT_HX - 0.26f), iScreenYMax * 0.2f, iScreenXMax * (CAPT_HX + 0.27f), iScreenYMax * (CAPT_HY + 0.01f) , 2, GxEPD_WHITE);
+  }
+  // HORIZONTAL GRAPH LAST
+  // LINES
+  display.setRotation(0);
+  iScreenXMax = display.width() ;
+  iScreenYMax = display.height();
+  fScreenXMax = (float)(display.width()) / 104.0f;
+  fScreenYMax = (float)(display.height()) / 212.0f;
+  iGAPGx1 = 5.0 * fScreenXMax;
+  iGAPGx2 = 30.0 * fScreenXMax;
+  iGAPX = 35.0 * fScreenXMax;
+  iGAPY = 80.0 * fScreenYMax;
+  iSTEPY = 5.45 * fScreenYMax;
+
+  // Then GRAPH
+  for (i = 0; i < 24; i++) {
+    //Line
+    iPos1 = iGAPGx1 + ((float)(iScreenXMax -  iGAPGx2 ) * (fPriceData[i] - fMin)) / (fMax - fMin);
+    display.fillRect(iPos1 - 3, (iGAPY + (i * iSTEPY)), 3,  3, GxEPD_BLACK);
+    if (i < 23) {
+      iPos1 = iGAPGx1 - 3 + ((float)(iScreenXMax - iGAPGx2 ) * (fPriceData[i] - fMin)) / (fMax - fMin);
+      iPos2 = iGAPGx1 - 3 + ((float)(iScreenXMax - iGAPGx2 ) * (fPriceData[i + 1] - fMin)) / (fMax - fMin);
+      drawLine(iPos1 + 1, (iGAPY + (i * iSTEPY) + 1), iPos2 + 1, (iGAPY + iSTEPY + (i * iSTEPY) + 1));
+      drawLine(iPos1 + 1, (iGAPY + (i * iSTEPY) + 2), iPos2 + 1, (iGAPY + iSTEPY + (i * iSTEPY) + 2));
+    }
+  }
+  display.fillRect(5, (iGAPY + (hour(tNow) * iSTEPY) + 1), iScreenXMax * 0.62f,  2, GxEPD_BLACK); // Now Line
+  //Box SEL
+  iPos1 = iGAPGx1 - 3 + ((float)(iScreenXMax - iGAPGx2) * (fPriceData[hour(tNow) ] - fMin)) / (fMax - fMin);
+  display.fillRect(iPos1 - 1, (iGAPY + (hour(tNow) * iSTEPY) - 1), 6,  6 , GxEPD_BLACK);
+  display.fillRect(iPos1 + 1, (iGAPY + (hour(tNow) * iSTEPY) + 1), 2,  2 , GxEPD_WHITE);
+  display.setFont(&FreeMonoBold9pt7b);
+  DisplayTextAligned(iScreenXMax * 0.98f, (iGAPY - 1 + iSTEPY + (hour(tNow) * iSTEPY)), (String)(hour(tNow)) + "h", -1, 12); //Now hour
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
 
 String sSSIDWebServerValue, sPASSWebServerValue;
 
@@ -561,10 +910,10 @@ bool StartWiFi(int iRetries) {
     String sAux = "";
     for (i = 0; i < iSPIFFSWifiSSIDs; i++) sAux = sAux + "," + sArrSSID[i];
     Serial.print(" none of " + sAux );
-    bAddWifi(HARDSSID, HARDPASSWORD); // Base inicial
+    iCreateWifi();
     return false;
   }
-  Serial.print(" found " + sArrSSID[iLastWifiNum] + ":" + sArrPASS[iLastWifiNum] );
+  Serial.print(" found " + sArrSSID[iLastWifiNum]  );
   WiFi.begin(sArrSSID[iLastWifiNum].c_str(), sArrPASS[iLastWifiNum].c_str());
   while (WiFi.status() != WL_CONNECTED ) {
     delay(500); Serial.print(".");
@@ -587,12 +936,16 @@ bool StartWiFi(int iRetries) {
   Serial.print(" @" + sWifiIP + " RSSI:" + (String)(iWifiRSSI) + "dBm ");
   NtpConnect();
   Serial.print("|");
+  sWifiFBMsg = "'" + sArrSSID[iLastWifiNum] + "' @" + (String)(iWifiRSSI)  + "dBm ";
   return true;
 }
 //////////////////////////////////////////////////////////////////////////////
 void NtpConnect() {
   struct tm tmLocal;
   int i = 0;
+  int32_t tNowOld, tSecsSinceFirstSync;
+  float fError;
+  tNowOld = time(nullptr) + 1;
   configTime( 0, 0, "pool.ntp.org", "time.nist.gov");
   setenv("TZ", sTimeZone.c_str(), 1);
   Serial.print(",NTP=");
@@ -607,29 +960,87 @@ void NtpConnect() {
     return;
   }
   delay(1000);
-  int32_t tNowOld = tNow - iTimeDiffPerDay;
   tNow = time(nullptr);
-  if (!bResetBtnPressed)  {
-    if (tNowOld > 0) iTimeDiffPerDay = tNow - tNowOld;
-    else iTimeDiffPerDay = 60;
-    if (iTimeDiffPerDay < -240) iTimeDiffPerDay = -240;
-    if (iTimeDiffPerDay > 240) iTimeDiffPerDay = 240;
+  if (!iFirstNTPSync) iFirstNTPSync = tNow;
+  tSecsSinceFirstSync = tNow - iFirstNTPSync;
+  if (tSecsSinceFirstSync > (iHoursUpdate * 3000)) {
+    fError = (float)(10000 * (tNow - tNowOld)) / (float)((tNow - iLastNTPSync) * (10000 + iTimeCorrection)); //error %1
+    iTimeCorrAccum = iTimeCorrAccum + (fError * (tNow - iLastNTPSync));
+    iTimeCorrection =   (float)(iTimeCorrAccum * 10000 ) / (float)(tSecsSinceFirstSync);
+    if (fError < 0.0001) iHoursUpdate++;
+    if (fError > 0.0010) iHoursUpdate--;
+    if (iHoursUpdate < HOURS_UPDATE) iHoursUpdate = HOURS_UPDATE;
+    if (iHoursUpdate > (HOURS_UPDATE * 10)) iHoursUpdate = HOURS_UPDATE * 10;
+  }
+  if ((!bResetBtnPressed) || (iMode == 5))  {
+    float fErrorPerDay = (float)((tNow - tNowOld) * 86400) / (float)(tNow - iLastNTPSync);
+    if (tNowOld > 0) iTimeDiffPerDay = fErrorPerDay;
+    else iTimeDiffPerDay = 0;
+    if (iTimeDiffPerDay < -480) iTimeDiffPerDay = -480;
+    if (iTimeDiffPerDay > 480) iTimeDiffPerDay = 480;
   } else iTimeDiffPerDay = 0;
+  iLastNTPSync = tNow;
   char buff[30];
   sprintf(buff, "%04d/%02d/%02d_%02d:%02d:%02d", year(tNow), month(tNow), day(tNow), hour(tNow), minute(tNow), second(tNow));
   Serial.printf(" %s Ok.", buff);
   bSaveInt("/timediff", iTimeDiffPerDay);
 }///////////////////////////////////////////////////////////////////////////////////////////////////
+void SendtoLightSleep(unsigned long ulMSecs) {
+  Serial.printf("-> light_sleep %d ms", ulMSecs);
+  delay(100);
+  uint64_t time_in_us = ulMSecs * 1000LL;
+  esp_err_t ret;
+  ret = esp_sleep_enable_timer_wakeup(time_in_us);
+  if (ret == ESP_OK) {
+    unsigned long ulMillis = millis();
+    ret = esp_light_sleep_start();
+    yield();
+    Serial.print(" done.\n ");
+  }
+  if (ret != ESP_OK) {
+    Serial.printf(" ERROR light_sleep: %d \n", ret);
+  }
+}
+///////////////////////////////////////////////////////////////////////////////////////////////////
 void SendToSleep(int iSecs) {
+  if (iSecs < 0) iSecs = 0;
   Serial.printf("--------------------------------------------------\nSent to sleep %d mins (alive %d secs).\n", iSecs / 60, millis() / 1000);
   bSaveTime(tNow + iSecs );
   delay(100);
   SPIFFS.end();
   delay(100);
+  if (iSecs > 300) iSecs = iSecs - (iTimeDiffPerDay / 24) + 20; //Compensation for sync error
   uint64_t sleep_time_us = (uint64_t)(iSecs) * 1000000ULL;
   esp_sleep_enable_timer_wakeup(sleep_time_us);
   Serial.print("--------------------------------------------------\n");
   esp_deep_sleep_start();
+}
+//////////////////////////////////////////////////////////////////////////////
+int iCreateWifi() {
+  String sSSID, sPASS, sArray = DEFAULT_WIFI_PARAMS;
+  int iPos1 , iPos2, iSSIDs = 0;
+  sArray = sArray + " ";
+  Serial.print(" CreateWifi from '" + sArray + "'");
+  do {
+    sSSID = "";
+    sPASS = "";
+    iPos1 = sArray.indexOf(" ");
+    iPos2 = sArray.indexOf(" ", iPos1 + 1);
+    if ((iPos1 < 1) || (iPos2 < 1)) {
+      Serial.print(" ERROR with '" + sArray + "'\n");
+      sArray = "";
+    } else {
+      sSSID = sArray.substring(0, iPos1);
+      sPASS = sArray.substring(iPos1 + 1, iPos2);
+      sSSID.trim();
+      sPASS.trim();
+      sArray.remove(0, iPos2 + 1);
+      iSSIDs++;
+      Serial.print(", found " + (String)(iSSIDs) + " [" + sSSID + "]:[" + sPASS + "] remain '" + sArray + "'\n");
+      bAddWifi(sSSID, sPASS);
+    }
+  } while (sArray.length() > 2);
+  return iSSIDs;
 }
 //////////////////////////////////////////////////////////////////////////////
 bool bLoadWifi() {
@@ -639,7 +1050,7 @@ bool bLoadWifi() {
   }
   if (!SPIFFS.exists("/wifi")) {
     Serial.print("\nERROR: No Wifi file\n");
-    bAddWifi(HARDSSID, HARDPASSWORD);
+    iCreateWifi();
     return true;
   }
   int i, iPos1 = 0, iPos2 = 0;
@@ -683,7 +1094,7 @@ bool bAddWifi(String sSSID, String sPass) {
   sPass.trim();
   if (sSSID.length() == 0) return false;
   if (sPass.length() == 0) return false;
-  Serial.print(" Adding Wifi:" + sSSID + ":" + sPass + ".");
+  Serial.print(" Adding Wifi: [" + sSSID + "]:[" + sPass + "].");
   for (i = 0; i < 10; i++) {
     if (sArrSSID[i] == "") break;
     if (sArrSSID[i] == sSSID) {
@@ -763,7 +1174,7 @@ bool bSaveMode(int iSaveMode) {
   Serial.printf(" Mode written %s. \n", sAux);
   int i;
   for (i = 0; i < 24; i++) {
-    fPriceHour[i] = 0;
+    fPriceData[i] = -100;
   }
   //  bSaveData("1971-01-01");
   return true;
@@ -796,6 +1207,27 @@ int iLoadInt(char* sName) {
   return iRes;
 }
 //////////////////////////////////////////////////////////////////////////////
+int iAddReboot() {
+  String sAux = readSPIFFSFile("/reboots");
+  if (sAux == "") {
+    tFirstReboot = tNow;
+    iNumberReboots = 0;
+  } else {
+    int iPos = sAux.indexOf(" ");
+    String sData = sAux.substring(0, iPos);
+    tFirstReboot = atoi(sData.c_str());
+    //Serial.print(" Reboot '" + (String)(year(tFirstReboot)) + "/" + int2str2dig(month(tFirstReboot)) + "/" + int2str2dig(day(tFirstReboot)) + "' + ");
+    sData = sAux.substring(iPos + 1, sAux.length() );
+    //Serial.println("'" + sData + "'" + " Pos=" + (String)(iPos) + " de '" + sAux + "'");
+    iNumberReboots = atoi(sData.c_str());
+  }
+  iNumberReboots++;
+  sAux = (String)(tFirstReboot) + " " + (String)(iNumberReboots);
+  writeSPIFFSFile("/reboots", sAux.c_str());
+  //Serial.println(" Reboots " + (String)(iNumberReboots) + " since " + (String)(year(tFirstReboot)) + "/" + int2str2dig(month(tFirstReboot)) + "/" + int2str2dig(day(tFirstReboot)));
+  return iNumberReboots;
+}
+//////////////////////////////////////////////////////////////////////////////
 bool StartWifiAP() {
   const char *APssid = "ESP32";
   WiFi.mode(WIFI_STA);
@@ -825,20 +1257,274 @@ bool StartWifiAP() {
   display.update();
   return true;
 }//////////////////////////////////////////////////////////////////////////////
+bool bGetOMIEDataMonthly(int iDate, float * fArray) {
+  bool bRes = false;
+  float fTempArray[31];
+  Serial.print("bGetOMIEDataMonthly ");
+  if (!bWeHaveFirebase) {
+    if (!bManageFirebase()) return false;
+  }
+  String sRoot = "/IoT/SolarCapt/", sPath;
+  int i, tBase, tTime;
+  tBase = iDate;
+  if (hour(tBase) < 2) tBase += 7200;
+  if (hour(tBase) > 22) tBase -= 7200;
+  sPath = sRoot + year(tBase) + "/" + int2str2dig(month(tBase)) + "/" + int2str2dig(day(tBase));
+  Firebase.get(firebaseData, sPath);
+  fCaptOMIE = firebaseData.doubleData();
+  if (fCaptOMIE == 0) {
+    Serial.print(" bGetOMIEDataMonthly NO fCaptOMIE -> " );
+    bGetData(tBase, 1); //LoadOMIE
+    if (fCaptOMIE == 0) return false;
+    Firebase.setDouble(firebaseData, sPath, fCaptOMIE);
+    delay(10);
+  }
+  sPath = sRoot + year(tBase - 34560000) + "/" + int2str2dig(month(tBase - 34560000));
+  Firebase.deleteNode(firebaseData, sPath);
+  delay(100);
+  //  Serial.printf(" -> Day:");
+  for (i = 0; i < 31; i++) {
+    tTime = tBase - ((30 - i) * 86400);
+    sPath = sRoot + year(tTime) + "/" + int2str2dig(month(tTime)) + "/" + int2str2dig(day(tTime));
+    bRes = Firebase.pathExist(firebaseData, sPath);
+    Firebase.get(firebaseData, sPath);
+    fArray[i] = firebaseData.doubleData();
+    delay(10);
+    //    Serial.printf("%s=%f, ", sPath.c_str(), fArray[i]);
+    if (!bRes) {
+      Serial.printf(" Empty value %s, recalc [%d]", sPath.c_str(), i);
+      if (bGetOMIEData15m(tTime, fTempArray)) {
+        fArray[i] = fCaptOMIE;
+        sPath = sRoot + year(tTime) + "/" + int2str2dig(month(tTime)) + "/" + int2str2dig(day(tTime));
+        Firebase.setDouble(firebaseData, sPath, fCaptOMIE);
+        Serial.printf(" New value=%f.", fCaptOMIE);
+      }
+    }
+    if ((i > 1) && (fArray[i] == fArray[i - 1])) {
+      Serial.printf(" REPETITION @%d -> RECALC.\n", i);
+      tTime = tBase - ((30 - i - 1) * 86400);
+      if (bGetOMIEData15m(tTime, fTempArray)) {
+        if (fCaptOMIE != 0) {
+          fArray[i - 1] = fCaptOMIE;
+          sPath = sRoot + year(tTime) + "/" + int2str2dig(month(tTime)) + "/" + int2str2dig(day(tTime));
+          Firebase.setDouble(firebaseData, sPath, fCaptOMIE);
+          Serial.printf(" New value i-1=%f.", fCaptOMIE);
+        } else {
+          Serial.printf(" ERROR i-1 fCaptOMIE=0");
+        }
+      }
+      tTime = tBase - ((30 - i) * 86400);
+      if (bGetOMIEData15m(tTime, fTempArray)) {
+        if (fCaptOMIE != 0) {
+          fArray[i] = fCaptOMIE;
+          sPath = sRoot + year(tTime) + "/" + int2str2dig(month(tTime)) + "/" + int2str2dig(day(tTime));
+          Firebase.setDouble(firebaseData, sPath, fCaptOMIE);
+          Serial.printf(" New value i=%f.", fCaptOMIE);
+        } else {
+          Serial.printf(" ERROR i fCaptOMIE=0");
+        }
+      }
+    }
+  }
+  if (fArray[30] == fArray[29]) {
+    Serial.printf(" INCORRECT REPETITION @%d -> BAD DATA.\n", i);
+    return false;
+  }
+  Serial.printf(" Today=%f Ok.\n", fArray[30]);
+  return (fArray[30] != 0);
+}
+//////////////////////////////////////////////////////////////////////////////
+bool bGetOMIEDataHourly(int iDate, float * fArray) {
+  if (!iDate) return false;
+  int httpPort = 443, iTries = 5, i, iLines = 0;
+  String sHost = "www.omie.es";
+  String sPath = "https://www.omie.es/sites/default/files/dados/NUEVA_SECCION/INT_PBC_EV_H_ACUM.TXT";
+  String sSearch = int2str2dig(day(iDate))  + "/" + int2str2dig(month(iDate)) + "/" +  (String)(year(iDate)) + ";";
+  bool bConn = false, bBadData = false, bExit = false;
+  unsigned long timeout ;
+  WiFiClientSecure  SecureClient;
+  Serial.print("  Connecting to {" + String(sHost) + "} ");
+  for (i = 0; i < 24; i++) fArray[i] = -100;
+  do {
+    if (SecureClient.connect(const_cast<char*>(sHost.c_str()), httpPort)) bConn = true;
+    else     delay(1000);
+    iTries--;
+  } while ((iTries) && (!bConn));
+  if (!bConn) {
+    Serial.print("\n ERROR **Connection failed for  {" + sPath + "} **\n");
+    return false;
+  }
+  Serial.print(" connected.");
+  SecureClient.print(String("GET ") + sPath + " HTTP/1.1\r\n" + "Host: " + sHost + "\r\n" + "Connection: close\r\n\r\n");
+  timeout = millis();
+  while (SecureClient.available() == 0) {
+    if (millis() - timeout > 10000) {
+      Serial.print("\n ERROR Client Connection Timeout 10 seg... Stopping.");
+      SecureClient.stop();
+      return false;
+    }
+  }
+  Serial.print(" download \n");
+  while (SecureClient.available() && !bExit && (iLines < 900)) {
+    String sTemp = SecureClient.readStringUntil('\n');
+    //   Serial.print(" New Line [" + sTemp + "]\n");
+    sTemp.replace("\n", "");
+    sTemp.replace("\r", "");
+    sTemp.trim();
+    if (sTemp.startsWith(sSearch)) {
+      //Serial.print("\n" + String(sTemp.length()) + "B,[" + sTemp + "] ");
+      int iHour, iPos1, iPos2, iPos3;
+      iPos1 = sTemp.indexOf(";", 10);
+      iPos2 = sTemp.indexOf(";", iPos1 + 1);
+      iPos3 = sTemp.indexOf(";", iPos2 + 1);
+      // Serial.printf(" Pos's % d, % d, % d | ", iPos1, iPos2, iPos3);
+      if ((iPos1 > -1) && (iPos2 > -1) && (iPos3 > -1)) {
+        float fPrice = 0;
+        String sAux;
+        sAux = sTemp.substring(iPos1 + 1, iPos2);
+        iHour = sAux.toInt();
+        //Serial.print(" Hour " + sAux + " = " + (String)(iHour));
+        sAux = sTemp.substring(iPos2 + 1, iPos3);
+        sAux.trim();
+        sAux.replace(",", ".");
+        fArray[iHour - 1] = atof(sAux.c_str());
+        //Serial.printf(" hour = % d price = % f from '%s', ", iHour, fArray[iHour - 1], sAux.c_str());
+      }
+    }
+    bExit = true;
+    for (int i = 0; i < 24; i++) {
+      if (fArray[i] == -100) {
+        bExit = false;
+      }
+    }
+    iLines++;
+  }
+  SecureClient.stop();
+  for (i = 0; i < 24; i++) {
+    if (fArray[i] == -100) {
+      bBadData = true;
+    }
+  }
+  if (bBadData) {
+    Serial.printf(" BAD DATA %d/%d/%d.", day(iDate), month(iDate), year(iDate) );
+  } else {
+    fCaptOMIE = fCalcOMIECapt(iDate, fArray);
+    fArray[24] = fCaptOMIE ;
+    if (bWeHaveWifi) {
+      bUpdateOMIECaptJson(iDate, fCaptOMIE);
+    }
+    bSaveData(iDate, 1);
+    Serial.printf(" Capt %d/%d/%d = %f  Ok.", day(iDate), month(iDate), year(iDate), fCaptOMIE);
+  }
+  return (!bBadData);
+}//////////////////////////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////
+bool bGetOMIEData15m(int iDate, float * fArray) {
+  if (!iDate) return false;
+  int httpPort = 443, iTries = 5, i, iLines = 0;
+  String sHost = "www.omie.es";
+  String sPath = "https://www.omie.es/sites/default/files/dados/NUEVA_SECCION/INT_PBC_EV_H_ACUM.TXT";
+  String sSearch = int2str2dig(day(iDate))  + "/" + int2str2dig(month(iDate)) + "/" +  (String)(year(iDate)) + ";";
+  bool bConn = false, bBadData = false, bExit = false;
+  unsigned long timeout ;
+  float f15m[96];
 
+  WiFiClientSecure  SecureClient;
+  Serial.print("  Connecting to {" + String(sHost) + "} ");
+  for (i = 0; i < 24; i++) fArray[i] = -100;
+  for (i = 0; i < 96; i++) f15m[i] = -100;
+  do {
+    if (SecureClient.connect(const_cast<char*>(sHost.c_str()), httpPort)) bConn = true;
+    else     delay(1000);
+    iTries--;
+  } while ((iTries) && (!bConn));
+  if (!bConn) {
+    Serial.print("\n ERROR **Connection failed for  {" + sPath + "} **\n");
+    return false;
+  }
+  Serial.print(" connected.");
+  SecureClient.print(String("GET ") + sPath + " HTTP/1.1\r\n" + "Host: " + sHost + "\r\n" + "Connection: close\r\n\r\n");
+  timeout = millis();
+  while (SecureClient.available() == 0) {
+    if (millis() - timeout > 10000) {
+      Serial.print("\n ERROR Client Connection Timeout 10 seg... Stopping.");
+      SecureClient.stop();
+      return false;
+    }
+  }
+  Serial.print(" download \n");
+  while (SecureClient.available() && !bExit && (iLines < 900)) {
+    String sTemp = SecureClient.readStringUntil('\n');
+    //   Serial.print(" New Line [" + sTemp + "]\n");
+    sTemp.replace("\n", "");
+    sTemp.replace("\r", "");
+    sTemp.trim();
+    if (sTemp.startsWith(sSearch)) {
+      //Serial.print("\n" + String(sTemp.length()) + "B,[" + sTemp + "] ");
+      int i15m, iPos1, iPos2, iPos3;
+      iPos1 = sTemp.indexOf(";", 10);
+      iPos2 = sTemp.indexOf(";", iPos1 + 1);
+      iPos3 = sTemp.indexOf(";", iPos2 + 1);
+      // Serial.printf(" Pos's % d, % d, % d | ", iPos1, iPos2, iPos3);
+      if ((iPos1 > -1) && (iPos2 > -1) && (iPos3 > -1)) {
+        float fPrice = 0;
+        String sAux;
+        sAux = sTemp.substring(iPos1 + 1, iPos2);
+        i15m = sAux.toInt();
+        //Serial.print(" 15m " + sAux + " = " + (String)(i15m));
+        sAux = sTemp.substring(iPos2 + 1, iPos3);
+        sAux.trim();
+        sAux.replace(",", ".");
+        f15m[i15m - 1] = atof(sAux.c_str());
+        //Serial.printf(" 15m = % d price = % f from '%s', ", iHour, fArray[i15m - 1], sAux.c_str());
+      }
+    }
+    bExit = true;
+    for (int i = 0; i < 96; i++) {
+      if (f15m[i] == -100) {
+        bExit = false;
+      }
+    }
+    iLines++;
+  }
+  SecureClient.stop();
+  for (i = 0; i < 96; i++) {
+    if (f15m[i] == -100) {
+      bBadData = true;
+    }
+  }
+  if (bBadData) {
+    Serial.printf(" BAD DATA %d/%d/%d.", day(iDate), month(iDate), year(iDate) );
+  } else {
+    for (i = 0; i < 24; i++) {
+      fArray[i] = (f15m[i * 4 + 0] + f15m[i * 4 + 1] + f15m[i * 4 + 2] + f15m[i * 4 + 3]) / 4;
+    }
+    fCaptOMIE = fCalcOMIECapt(iDate, fArray);
+    fArray[24] = fCaptOMIE ;
+    if (bWeHaveWifi) {
+      bUpdateOMIECaptJson(iDate, fCaptOMIE);
+    }
+    bSaveData(iDate, 1);
+    Serial.printf(" Capt 15m %d/%d/%d = %f  Ok.", day(iDate), month(iDate), year(iDate), fCaptOMIE);
+  }
+  return (!bBadData);
+}//////////////////////////////////////////////////////////////////////////////////////////////////
 
-bool bGetOMIEData(int iDate, float * fArray) {
+//////////////////////////////////////////////////////////////////////////////
+bool bGetOMIEData15mAlt(int iDate, float * fArray) {
   if (!iDate) return false;
   int httpPort = 443, iTries = 5, i;
   String sHost = "www.omie.es";
   String sPath = "https://www.omie.es/es/file-download?parents%5B0%5D=marginalpdbc&filename=marginalpdbc_";
   String sSearch = (String)(year(iDate)) + ";" + int2str2dig(month(iDate)) + ";" + int2str2dig(day(iDate));
   bool bConn = false, bBadData = false;
+  float f15m[96];
   unsigned long timeout ;
   WiFiClientSecure  SecureClient;
   sPath = sPath + (String)(iDateNum(iDate)) + ".1";
   Serial.print("  Connecting to {" + String(sHost) + "} ");
   for (i = 0; i < 24; i++) fArray[i] = -100;
+  for (i = 0; i < 96; i++) f15m[i] = -100;
   do {
     if (SecureClient.connect(const_cast<char*>(sHost.c_str()), httpPort)) bConn = true;
     else     delay(1000);
@@ -866,7 +1552,7 @@ bool bGetOMIEData(int iDate, float * fArray) {
     sTemp.trim();
     if (sTemp.indexOf(sSearch) > -1) {
       //     Serial.print("\n" + String(sTemp.length()) + "B,[" + sTemp + "] ");
-      int iHour, iPos1, iPos2, iPos3, iPos4;
+      int i15m, iPos1, iPos2, iPos3, iPos4;
       iPos1 = sTemp.indexOf(";", 10);
       iPos2 = sTemp.indexOf(";", iPos1 + 1);
       iPos3 = sTemp.indexOf(";", iPos2 + 1);
@@ -875,23 +1561,31 @@ bool bGetOMIEData(int iDate, float * fArray) {
         float fPrice = 0;
         String sAux;
         sAux = sTemp.substring(iPos1 + 1, iPos2);
-        iHour = sAux.toInt();
+        i15m = sAux.toInt();
         sAux = sTemp.substring(iPos3 + 1, iPos4);
-        fArray[iHour - 1] = atof(sAux.c_str());
-        //Serial.printf(" hour=%d price=%f,", iHour, fArray[iHour-1]);
+        f15m[i15m - 1] = atof(sAux.c_str());
+        //Serial.printf(" 15m=%d price=%f,", iHour, fArray[i15m-1]);
       }
     }
   }
   SecureClient.stop();
-  for (i = 0; i < 24; i++) {
-    if (fArray[i] == -100) {
+  for (i = 0; i < 96; i++) {
+    if (f15m[i] == -100) {
       bBadData = true;
     }
   }
   if (bBadData) {
     Serial.print(" BAD DATA.");
   } else {
-    bCalcOMIECapt();
+    for (i = 0; i < 24; i++) {
+      fArray[i] = (f15m[i * 4 + 0] + f15m[i * 4 + 1] + f15m[i * 4 + 2] + f15m[i * 4 + 3]) / 4;
+    }
+    fCaptOMIE = fCalcOMIECapt(iDate, fArray);
+    fArray[24] = fCaptOMIE ;
+    if (bWeHaveWifi) {
+      bUpdateOMIECaptJson(iDate, fCaptOMIE);
+    }
+    bSaveData(iDate, 1);
     Serial.printf(" Capt=%f  Ok.", fCaptOMIE);
   }
   return (!bBadData);
@@ -905,9 +1599,9 @@ bool bGetESIOSData(int iDate, float * fArray) {
   String sSearchDate = "\"datetime\":\"" + (String)(year(iDate)) + "-" + int2str2dig(month(iDate)) + "-" + int2str2dig(day(iDate)) + "T";
   String sSearchPeninsula = "\"geo_id\":8741";
   String sJson = "";
-  bool bConn = false, bCollect = false;
+  bool bConn = false, bCollect = false, bBadData = false;
   unsigned long timeout ;
-  int iHour, iPos1, iPos2, iPos3;
+  int iHour, iPos1, iPos2, iPos3, i;
   WiFiClientSecure  SecureClient;
   Serial.print("  Connecting to {" + String(sHost) + "} ");
   do {
@@ -939,13 +1633,13 @@ bool bGetESIOSData(int iDate, float * fArray) {
     if (bCollect) {
       sJson = sJson + sTemp;
       Serial.print("-");
-    } //e lse Serial.print(String(sTemp.length()) + "B [" + sTemp + "]\n");
+    } //else Serial.print(String(sTemp.length()) + "B [" + sTemp + "]\n");
     sTemp = "";
   }
   SecureClient.stop();
-
-  //  Serial.print("\n\nJSON [" + (String)(sJson.length()) + "]:\n" + sJson + "\n");
+  Serial.print("\nJSON [" + (String)(sJson.length()) + "]:\n" + sJson + "\n");
   sJson.replace(" ", "");
+  for ( iHour = 0; iHour < 24; iHour++)     fArray[iHour] = -100;
   if (sJson.length() > 1000) {
     sJson.replace(":00:00.000", "");
     sJson.trim();
@@ -954,7 +1648,6 @@ bool bGetESIOSData(int iDate, float * fArray) {
       iPos1 = 0;
       iPos2 = 0;
       iPos3 = 0;
-      fArray[iHour] = -1;
       while (iPos1 > -1) {
         iPos1 = sJson.indexOf(sSearchDate + int2str2dig(iHour), iPos1 + 1);
         if (iPos1 > -1) {
@@ -965,45 +1658,60 @@ bool bGetESIOSData(int iDate, float * fArray) {
               String sAux;
               sAux = sJson.substring(iPos3 + 7, iPos3 + 13) ;
               fArray[iHour] = atof(sAux.c_str());
-              //Serial.print("Value[" + int2str2dig(iHour) + "]:'" + sAux + "'=" + (String)(fArray[iHour]) + "\n");
+              Serial.print("Value[" + int2str2dig(iHour) + "]:'" + sAux + "'=" + (String)(fArray[iHour]) + "\n");
             } else {
-              //Serial.print("hour" + (String)(iHour) + " not value.\n");
+              Serial.print("hour" + (String)(iHour) + " not value.\n");
             }
           } else {
-            //Serial.print("hour" + (String)(iHour) + " not Peninsula with '" + sSearchPeninsula + "' -> " + (String)(iPos2) + "-" + (String)(iPos1) + "=" + (String)(iPos2 - iPos1) + " \n");
+            Serial.print("hour" + (String)(iHour) + " not Peninsula with '" + sSearchPeninsula + "' -> " + (String)(iPos2) + "-" + (String)(iPos1) + "=" + (String)(iPos2 - iPos1) + " \n");
           }
         } else {
-          //Serial.print("hour" + (String)(iHour) + " not found with '" + sSearchDate + int2str2dig(iHour) + "'.\n");
+          Serial.print("hour" + (String)(iHour) + " not found with '" + sSearchDate + int2str2dig(iHour) + "'.\n");
         }
       }
       Serial.printf(" hour[%d] = %f, ", iHour, fArray[iHour]);
     } //FOR
   }
-  Serial.print(" Ok.\n");
-  bSaveData((String)(year(iDate)) + "-" + int2str2dig(month(iDate)) + "-" + int2str2dig(day(iDate)));
-  return true;
+  for (i = 0; i < 24; i++) {
+    if (fArray[i] == -100) {
+      bBadData = true;
+    }
+  }
+  if (bBadData) {
+    Serial.print(" BAD DATA.\n");
+  } else {
+    bSaveData(iDate, 0);
+    Serial.print(" Ok.\n");
+  }
+  return (!bBadData);
 }//////////////////////////////////////////////////////////////////////////////////////////////////
-bool bCalcOMIECapt() {
-  fCaptOMIE = 0;
+float fCalcOMIECapt(int tTime, float * fArrayData) {
+  const float fCurv[] = { 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.10, 0.23, 0.34, 0.43, 0.46, 0.43, 0.34, 0.23, 0.10, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.04, 0.19, 0.34, 0.48, 0.58, 0.61, 0.58, 0.48, 0.34, 0.19, 0.04, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.11, 0.26, 0.42, 0.55, 0.64, 0.67, 0.64, 0.55, 0.42, 0.26, 0.11, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.11, 0.26, 0.42, 0.55, 0.64, 0.67, 0.64, 0.55, 0.42, 0.26, 0.11, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.06, 0.19, 0.35, 0.50, 0.63, 0.72, 0.75, 0.72, 0.63, 0.50, 0.35, 0.19, 0.06, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.13, 0.28, 0.44, 0.60, 0.74, 0.83, 0.86, 0.83, 0.74, 0.60, 0.44, 0.28, 0.13, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.03, 0.16, 0.31, 0.47, 0.63, 0.76, 0.85, 0.88, 0.85, 0.76, 0.63, 0.47, 0.31, 0.16, 0.03, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.02, 0.16, 0.33, 0.51, 0.69, 0.83, 0.93, 0.97, 0.93, 0.83, 0.69, 0.51, 0.33, 0.16, 0.02, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.09, 0.25, 0.43, 0.60, 0.74, 0.84, 0.88, 0.84, 0.74, 0.60, 0.43, 0.25, 0.09, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.02, 0.16, 0.32, 0.49, 0.63, 0.73, 0.76, 0.73, 0.63, 0.49, 0.32, 0.16, 0.02, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.06, 0.20, 0.35, 0.49, 0.58, 0.61, 0.58, 0.49, 0.35, 0.20, 0.06, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.06, 0.20, 0.35, 0.49, 0.58, 0.61, 0.58, 0.49, 0.35, 0.20, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.11, 0.24, 0.35, 0.43, 0.46, 0.43, 0.35, 0.24, 0.11, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.08, 0.20, 0.31, 0.38, 0.41, 0.38, 0.31, 0.20, 0.08, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00};
+  float fRes = 0;
   float fCurvTotal = 0;
-  int iOffset = (month(tNow) - 1) * 24;
-  if ((month(tNow) == 3) && (day(tNow) > 24) )  iOffset += 24;
+  int iOffset = (month(tTime) - 1) * 24;
+  if ((month(tTime) == 3) && (day(tTime) > 24) )  iOffset += 24;
   else {
-    if (month(tNow) > 3)  iOffset += 24;
+    if (month(tTime) > 3)  iOffset += 24;
   }
-  if ((month(tNow) == 10) && (day(tNow) > 28))  iOffset += 24;
+  if ((month(tTime) == 10) && (day(tTime) > 28))  iOffset += 24;
   else {
-    if (month(tNow) > 10) iOffset += 24;
+    if (month(tTime) > 10) iOffset += 24;
   }
-  //  Serial.printf(" bCalcOMIECapt Month=%d , offset=%d  ", month(tNow), iOffset);
+  //Serial.printf(" bCalcOMIECapt Month=%d , offset=%d  ", month(tTime), iOffset);
   for (int i = 0; i < 14; i++) {
-    fCaptOMIE = fCaptOMIE + fPriceHour[i + 6] * fCurv[i + iOffset + 6];
+    fRes = fRes + fArrayData[i + 6] * fCurv[i + iOffset + 6];
     fCurvTotal = fCurvTotal + fCurv[i + iOffset + 6];
-    //   Serial.printf(",%f*%f", fPriceHour[i + 6], fCurv[i + iOffset + 6]);
+    //Serial.printf(",%f*%f", fArrayData[i + 6], fCurv[i + iOffset + 6]);
   }
-  fCaptOMIE = fCaptOMIE / fCurvTotal;
-  // Serial.printf("   CAPT=%f\n", fCaptOMIE);
-  return true;
+  fRes = fRes / fCurvTotal;
+  int iCapt = fCaptOMIE * 100.0f;
+  fCaptOMIE = iCapt / 100.0f;
+  //Serial.printf("   CAPT=%f\n", fCaptOMIE);
+  if (bWeHaveWifi) {
+    bUpdateOMIECaptJson(tTime, fCaptOMIE);
+  }
+  return fRes;
 }
 //////////////////////////////////////////////////////////////////////////////////////////////////
 void drawLine(float x1, float y1, float x2, float y2 ) {
@@ -1086,7 +1794,7 @@ int day(time_t t) {
 int weekday(time_t t) {
   struct tm * timeinfo;
   timeinfo = localtime(&t);
-  return (timeinfo->tm_wday + 1);
+  return timeinfo->tm_wday;
 }
 
 int month(time_t t) {
@@ -1115,77 +1823,137 @@ String sTimetoStr(int32_t tTime) {
   sprintf(buff, "%04d/%02d/%02d_%02d:%02d:%02d", year(tTime), month(tTime), day(tTime), hour(tTime), minute(tTime), second(tTime));
   return (String)(buff);
 }
-
-
 //////////////////////////////////////////////////////////////////////////////
-bool bLoadData(String sToday) {
-  String sData, sAux, sModeName;
+bool bLoadData(int tTime, int iModeVar) {
+  String sData, sAux, sModeName, sToday ;
   float fDataSum = 0;
-  int iPos1 = 0, iPos2 = 0 , i;
-  if (iMode % 2) sModeName = "/esios";
-  else sModeName = "/omie";
+  int iPos1 = 0, iPos2 = 0 , i, iMaxData = 24;
+  sToday = (String)(year(tTime)) + "-" + int2str2dig(month(tTime)) + "-" + int2str2dig(day(tTime));
+  if (iModeVar == 4) iMaxData = 31;;
+  if ((iModeVar == 1) || (iModeVar == 3)) iMaxData = 25;
+  for (i = 0; i < iMaxData; i++) fPriceData[i] = -100;
+  Serial.printf(" LoadSPIFFSData Mode=%d ", iModeVar);
+  switch (iModeVar) {
+    case 0:  sModeName = "/esios";
+      break;
+    case 1:  sModeName = "/omie_d";
+      break;
+    case 2:  sModeName = "/esios";
+      break;
+    case 3:  sModeName = "/omie_d";
+      break;
+    case 4:  sModeName = "/omie_m";
+      break;
+  }
   if (!SPIFFS.exists(sModeName.c_str())) return false;
   sData = readSPIFFSFile(sModeName.c_str());
   iPos1 = sData.indexOf("\n", 0);
   if (iPos1 == -1) return false;
   sAux = sData.substring(0, iPos1);
   if (sToday == "") sToday = sAux;
-  //Serial.printf("\nDATA = '%s' & Today = '%s'", sData.c_str(), sToday.c_str());
   if (sAux != sToday)  {
     Serial.printf("\nDATA is old with '%s' and '%s'", sAux.c_str(), sToday.c_str());
-    for (i = 0; i < 24; i++) {
-      fPriceHour[i] = -1;
-    }
+    deleteSPIFFSFile(sModeName.c_str());
     return false;
   }
-  for (i = 0; i < 24; i++) {
+  for (i = 0; i < iMaxData; i++) {
     iPos2 = sData.indexOf("\n", iPos1 + 1);
     sAux = sData.substring(iPos1 + 1, iPos2);
     //Serial.printf("\n %d:%s", i, sAux.c_str());
-    fPriceHour[i] = atof(sAux.c_str());
-    if (i > 1) fDataSum += fPriceHour[i] ;
+    fPriceData[i] = atof(sAux.c_str());
+    if (i > 1) fDataSum += fPriceData[i] ;
     iPos1 = iPos2;
   }
-  if (iMode % 2) {
-    Serial.printf("\nLoadData; mean ESIOS value = '%f'\n", fDataSum / 24);
-  } else {
-    bCalcOMIECapt();
-    Serial.printf("\nLoadData; Captured OMIE value = '%f'\n", fCaptOMIE);
+  if (sModeName == "/esios") {
+    Serial.printf("; mean ESIOS value = '%f'\n", fDataSum / 24);
   }
-
+  if (sModeName == "/omie_d") {
+    fCaptOMIE = fCalcOMIECapt(tTime, fPriceData);
+    if (bWeHaveWifi) bUpdateOMIECaptJson(tTime, fCaptOMIE);
+    Serial.printf("; Captured OMIE value = '%f' & Pr[24]=%f\n", fCaptOMIE, fPriceData[24]);
+  }
+  if (sModeName == "/omie_m") {
+    Serial.printf("; 31D avg OMIE solar= '%f'\n", fDataSum / 31);
+  }
   return (fDataSum > 0);
 }
 //////////////////////////////////////////////////////////////////////////////
-bool bSaveData(String sToday) {
-  String sData, sAux, sModeName;
-  int i, iSum = 0;
+bool bSaveData(int tTime, int iModeVar) {
+  String sData, sAux, sModeName, sToday;
+  int i, iSum = 0, iMaxData = 24;
+  sToday = (String)(year(tTime)) + "-" + int2str2dig(month(tTime)) + "-" + int2str2dig(day(tTime));
+  if (iModeVar == 4) iMaxData = 31;
+  if ((iModeVar == 1) || (iModeVar == 3)) iMaxData = 25;
   sData = sToday + "\n";
-  for (i = 0; i < 24; i++) {
-    sData = sData + (String)(fPriceHour[i]) + "\n";
-    iSum += fPriceHour[i];
+  for (i = 0; i < iMaxData; i++) {
+    sData = sData + (String)(fPriceData[i]) + "\n";
+    iSum += fPriceData[i];
+    if (fPriceData[i] == -100) return false;
   }
-  if (iMode % 2) sModeName = "/esios";
-  else sModeName = "/omie";
+  switch (iModeVar) {
+    case 0:  sModeName = "/esios";
+      break;
+    case 1:  sModeName = "/omie_d";
+      break;
+    case 2:  sModeName = "/esios";
+      break;
+    case 3:  sModeName = "/omie_d";
+      break;
+    case 4:  sModeName = "/omie_m";
+      break;
+  }
   if (iSum > 0)  writeSPIFFSFile(sModeName.c_str(), sData.c_str());
   return true;
 }
 //////////////////////////////////////////////////////////////////////////////
-bool bGetData(int tTime) {
-  String sAux = (String)(year(tTime)) + "-" + int2str2dig(month(tTime)) + "-" + int2str2dig(day(tTime));
-  if (!bLoadData(sAux)) {
+bool bGetData(int tTime, int iModeVar) {
+  bool bBadData = true, bLoaded = false;
+  Serial.printf(" GetData[%d]:", iModeVar);
+  if (iModeVar == 5) return true; //Clock
+  if (!bLoadData(tTime, iModeVar)) {
     if (!bWeHaveWifi) StartWiFi(10);
-    if (iMode % 2)  {
-      bGetESIOSData(tTime, fPriceHour);
+    if (bWeHaveWifi) {
+      Serial.printf(" Downloading -> ");
+      bLoaded = true;
+      switch (iModeVar)  {
+        case 0 : bBadData = !bGetESIOSData(tTime, fPriceData);
+          break;
+        case 1 : bBadData = !bGetOMIEData15m(tTime, fPriceData);
+          if (bBadData) bBadData = !bGetOMIEData15mAlt(tTime, fPriceData);
+          break;
+        case 2: bBadData = !bGetESIOSData(tTime, fPriceData);
+          break;
+        case 3: bBadData = !bGetOMIEData15m(tTime, fPriceData);
+          if (bBadData) bBadData = !bGetOMIEData15mAlt(tTime, fPriceData);
+          break;
+        case 4: bBadData = !bGetOMIEDataMonthly(tTime, fPriceData);
+          break;
+      }
+      Serial.printf(" Downloaded ");
     } else {
-      bGetOMIEData(tTime, fPriceHour);
+      Serial.printf(" SPIFFS Bad, No Wifi, ");
     }
+  } else {
+    Serial.printf(" SPIFFS ");
+    bBadData = false;
   }
-  int i, iSum = 0;
-  for (i = 0; i < 24; i++) iSum += fPriceHour[i];
-  if (iSum > 0) bSaveData(sAux);
-  return (iSum > 0);
+  if (bBadData) {
+    Serial.printf(" BadData.\n");
+  } else {
+    Serial.printf(" Data Ok.\n");
+  }
+  return (!bBadData);
 }
-//////////////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////////////
+bool bUpdateOMIECaptJson(int tTime, float CaptValue) {
+  if (!bWeHaveFirebase) {
+    if (!bManageFirebase()) return false;
+  }
+  String sPath = "/IoT/SolarCapt/" + (String)(year(tTime)) + "/" + int2str2dig(month(tTime)) + "/" + int2str2dig(day(tTime)) ;
+  Firebase.setDouble(firebaseData, sPath, CaptValue);
+  return true;
+}
+/////////////////////////////////////////////////////////////////////////////
 String readFSFile(fs::FS & fs, const char * path) {
   Serial.printf(" {R'%s'", path);
   delay(50);
@@ -1318,12 +2086,19 @@ String sGetResetReason() {
   String ret = "";
   switch (rtc_get_reset_reason(0)) {
     case 1   : ret = "PON"; break;
+      break;
     case 5   : ret = "SLP"; break;
+      break;
     case 7   : ret = "WD0"; break;
+      break;
     case 8   : ret = "WD1"; break;
+      break;
     case 12  : ret = "RST"; break;
+      break;
     case 13  : ret = "BUT"; break;
+      break;
     case 16  : ret = "RTC"; break;
+      break;
     default:    ret = (String)(rtc_get_reset_reason(0));
   }
   return ret;
